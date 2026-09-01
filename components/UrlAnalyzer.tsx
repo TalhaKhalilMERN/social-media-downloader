@@ -210,8 +210,8 @@ export default function UrlAnalyzer() {
       {result && result.video && (
         <div className="space-y-6 animate-fadeIn">
           {/* Metadata Header Card */}
-          <div className="rounded-2xl bg-slate-900/80 border border-slate-800 p-6 md:p-8 backdrop-blur-xl shadow-xl space-y-6">
-            <div className="flex items-center justify-between border-b border-slate-800/80 pb-4">
+          <div className="rounded-2xl bg-slate-900/80 border border-slate-800 p-6 md:p-8 backdrop-blur-xl shadow-xl space-y-6 overflow-hidden">
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-4 flex-wrap gap-2">
               <div className="flex items-center gap-2 text-emerald-400 text-sm font-semibold">
                 <CheckCircle2 className="w-5 h-5" />
                 Analysis Complete
@@ -222,7 +222,7 @@ export default function UrlAnalyzer() {
               </span>
             </div>
 
-            <div className="flex flex-col md:flex-row gap-6">
+            <div className="flex flex-col md:flex-row gap-6 min-w-0">
               {result.video.thumbnail ? (
                 <div className="relative w-full md:w-72 aspect-video md:aspect-auto md:h-44 rounded-xl overflow-hidden bg-slate-950 border border-slate-800 shrink-0 group">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -245,16 +245,17 @@ export default function UrlAnalyzer() {
                 </div>
               )}
 
-              <div className="space-y-4 flex-1">
-                <div>
-                  <h3 className="text-lg md:text-xl font-bold text-slate-100 leading-snug">
+              <div className="space-y-4 flex-1 min-w-0">
+                <div className="min-w-0">
+                  <h3 className="text-lg md:text-xl font-bold text-slate-100 leading-snug break-words">
                     {result.video.title}
                   </h3>
                   <a
                     href={result.video.webpageUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-xs text-violet-400 hover:text-violet-300 transition-colors truncate block mt-1 hover:underline"
+                    className="text-xs text-violet-400 hover:text-violet-300 transition-colors truncate block mt-1 hover:underline max-w-full"
+                    title={result.video.webpageUrl}
                   >
                     {result.video.webpageUrl}
                   </a>
