@@ -24,7 +24,6 @@ export default function UrlAnalyzer() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
-  const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
 
   const handlePaste = async () => {
     try {
@@ -42,14 +41,12 @@ export default function UrlAnalyzer() {
     setUrl('');
     setError(null);
     setResult(null);
-    setDownloadNotice(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setDownloadNotice(null);
 
-    // Step 1: Client-side domain validation (Stop immediately for unsupported sites)
+    // Step 1: Client-side domain validation
     const validation = validateSupportedUrl(url);
     if (!validation.isValid) {
       setError(validation.error || 'Unsupported website. This downloader currently supports ReelShort and DramaBox only.');
@@ -86,10 +83,17 @@ export default function UrlAnalyzer() {
   };
 
   const handleDownloadClick = (fmt: NormalizedFormat) => {
-    const resText = fmt.width && fmt.height ? `${fmt.width}×${fmt.height}` : fmt.resolution;
-    setDownloadNotice(
-      `Download feature for ${fmt.resolution} (${resText}) is coming soon! File delivery is in development.`
-    );
+    if (!url.trim()) return;
+    const downloadApiUrl = `/api/download?url=${encodeURIComponent(url.trim())}&quality=${encodeURIComponent(fmt.quality)}&source=${encodeURIComponent(fmt.source)}`;
+    
+    // Trigger file attachment download cleanly without mutating window.location directly
+    const link = document.createElement('a');
+    link.href = downloadApiUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const formatDuration = (seconds?: number | null) => {
@@ -101,19 +105,6 @@ export default function UrlAnalyzer() {
       return `${hrs}h ${mins.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`;
     }
     return `${mins}m ${secs.toString().padStart(2, '0')}s`;
-  };
-
-  const formatFileSize = (bytes?: number | null) => {
-    if (bytes === undefined || bytes === null || bytes <= 0) return 'Size unavailable';
-    const kb = bytes / 1024;
-    const mb = kb / 1024;
-    if (mb >= 1024) {
-      return `~${(mb / 1024).toFixed(1)} GB`;
-    }
-    if (mb >= 1) {
-      return `~${mb.toFixed(1)} MB`;
-    }
-    return `~${kb.toFixed(0)} KB`;
   };
 
   return (
@@ -198,23 +189,6 @@ export default function UrlAnalyzer() {
             <h4 className="font-semibold text-red-300 text-sm">Validation Error</h4>
             <p className="text-sm text-red-300/80">{error}</p>
           </div>
-        </div>
-      )}
-
-      {/* Temporary Download Notice */}
-      {downloadNotice && (
-        <div className="rounded-xl bg-violet-950/40 border border-violet-800/60 p-4 text-violet-200 flex items-center justify-between gap-3 shadow-lg animate-fadeIn">
-          <div className="flex items-center gap-2.5 text-sm">
-            <Info className="w-4 h-4 text-violet-400 shrink-0" />
-            <span>{downloadNotice}</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setDownloadNotice(null)}
-            className="text-xs px-2 py-1 rounded bg-violet-900/50 hover:bg-violet-800/50 text-violet-300 transition-colors shrink-0 cursor-pointer"
-          >
-            Dismiss
-          </button>
         </div>
       )}
 
@@ -309,15 +283,26 @@ export default function UrlAnalyzer() {
           </div>
 
           {/* Formats Card */}
-          <div className="rounded-2xl bg-slate-900/80 border border-slate-800 p-6 md:p-8 backdrop-blur-xl shadow-xl space-y-4">
+          <div className="rounded-2xl bg-slate-900/80 border border-slate-800 p-6 md:p-8 backdrop-blur-xl shadow-xl space-y-5">
             <div className="flex items-center justify-between">
               <h4 className="text-base font-bold text-slate-100 flex items-center gap-2">
                 <FileVideo className="w-5 h-5 text-violet-400" />
-                Available Formats
+                Available Qualities
               </h4>
               <span className="text-xs text-slate-400">
-                Discovered qualities
+                Native & Generated Options
               </span>
+            </div>
+
+            {/* Generated Quality Notice Banner */}
+            <div className="rounded-xl bg-slate-950/60 border border-slate-800 p-4 text-slate-300 text-xs flex items-start gap-3">
+              <Info className="w-4 h-4 text-violet-400 shrink-0 mt-0.5" />
+              <div className="space-y-0.5">
+                <span className="font-semibold text-slate-200 block">Generated quality</span>
+                <p className="text-slate-400 leading-relaxed">
+                  360p, 480p, and 1080p versions are generated from the original video and may take a little longer to prepare before download.
+                </p>
+              </div>
             </div>
 
             {result.formats && result.formats.length > 0 ? (
@@ -336,14 +321,14 @@ export default function UrlAnalyzer() {
                       <tr key={`${fmt.id}-${idx}`} className="hover:bg-slate-800/30 transition-colors">
                         <td className="py-4 px-6 font-bold text-slate-100">
                           <span className="inline-flex items-center px-3 py-1 rounded-md text-xs font-bold bg-violet-500/20 text-violet-300 border border-violet-500/30">
-                            {fmt.resolution}
+                            {fmt.quality}
                           </span>
                         </td>
                         <td className="py-4 px-6 text-slate-300 font-mono text-xs">
-                          {fmt.width && fmt.height ? `${fmt.width} × ${fmt.height}` : 'N/A'}
+                          {fmt.resolution}
                         </td>
                         <td className="py-4 px-6 font-mono text-xs text-slate-300">
-                          {formatFileSize(fmt.filesize)}
+                          {fmt.filesizeDisplay}
                         </td>
                         <td className="py-4 px-6 text-right">
                           <button

@@ -1,69 +1,12 @@
 import { execFile } from 'child_process';
-import fs from 'fs';
 import { promisify } from 'util';
 import { NormalizedFormat, NormalizedVideoMetadata, PlatformType } from '../types/video';
 import { validateSupportedUrl } from './url-validator';
+import { getYtDlpPath } from './binaries';
+import { inspectMediaUrl } from './media-inspector';
+import { getVideoQuality, calculateVariantDimensions } from './quality';
 
 const execFileAsync = promisify(execFile);
-
-// Candidate executable locations on Windows/Linux/macOS
-const FALLBACK_YTDLP_PATHS = [
-  'C:\\Users\\talha\\Downloads\\yt-dlp.exe',
-  'C:\\yt-dlp.exe',
-  '/usr/local/bin/yt-dlp',
-  '/usr/bin/yt-dlp',
-];
-
-/**
- * Locate the yt-dlp executable path.
- * Checks process.env.YTDLP_PATH first, then fallback known local paths,
- * or defaults to 'yt-dlp' if assumed in system PATH.
- */
-function getYtDlpExecutablePath(): string {
-  if (process.env.YTDLP_PATH && fs.existsSync(/*turbopackIgnore: true*/ process.env.YTDLP_PATH)) {
-    return process.env.YTDLP_PATH;
-  }
-
-  for (const fallbackPath of FALLBACK_YTDLP_PATHS) {
-    if (fs.existsSync(/*turbopackIgnore: true*/ fallbackPath)) {
-      return fallbackPath;
-    }
-  }
-
-  return 'yt-dlp';
-}
-
-/**
- * Formats width & height into standard quality labels (e.g. 720x1280 -> 720p).
- */
-function determineResolution(
-  width?: number | null,
-  height?: number | null,
-  rawRes?: string | null
-): string {
-  if (width && height && width > 0 && height > 0) {
-    const minDim = Math.min(width, height);
-    return `${minDim}p`;
-  }
-
-  if (rawRes) {
-    const match = rawRes.match(/(\d+)x(\d+)/i);
-    if (match) {
-      const w = parseInt(match[1], 10);
-      const h = parseInt(match[2], 10);
-      if (!isNaN(w) && !isNaN(h) && w > 0 && h > 0) {
-        return `${Math.min(w, h)}p`;
-      }
-    }
-
-    const pMatch = rawRes.match(/(\d+p)/i);
-    if (pMatch) {
-      return pMatch[1].toLowerCase();
-    }
-  }
-
-  return 'Unknown';
-}
 
 interface RawYtDlpFormat {
   format_id?: string;
@@ -74,6 +17,7 @@ interface RawYtDlpFormat {
   filesize?: number;
   filesize_approx?: number;
   vcodec?: string;
+  url?: string;
 }
 
 interface RawYtDlpOutput {
@@ -91,11 +35,30 @@ interface RawYtDlpOutput {
   format_id?: string;
   filesize?: number;
   filesize_approx?: number;
+  url?: string;
   formats?: RawYtDlpFormat[];
 }
 
+function formatFileSizeDisplay(bytes?: number | null, isGenerated = false): string {
+  if (isGenerated) {
+    return 'Calculated on download';
+  }
+  if (!bytes || bytes <= 0) {
+    return 'Size unavailable';
+  }
+  const kb = bytes / 1024;
+  const mb = kb / 1024;
+  if (mb >= 1024) {
+    return `~${(mb / 1024).toFixed(1)} GB`;
+  }
+  if (mb >= 1) {
+    return `~${mb.toFixed(1)} MB`;
+  }
+  return `~${kb.toFixed(0)} KB`;
+}
+
 /**
- * Execute yt-dlp with JSON metadata mode for validated ReelShort and DramaBox URLs.
+ * Execute yt-dlp metadata analysis and inspect video media with ffprobe.
  */
 export async function analyzeVideoUrl(targetUrl: string): Promise<{
   platform: PlatformType;
@@ -109,9 +72,8 @@ export async function analyzeVideoUrl(targetUrl: string): Promise<{
   }
 
   const platform = validation.platform;
-  const ytDlpPath = getYtDlpExecutablePath();
+  const ytDlpPath = getYtDlpPath();
 
-  // Arguments passed securely to yt-dlp as an array
   const args = [
     '-J',
     '--no-warnings',
@@ -123,8 +85,8 @@ export async function analyzeVideoUrl(targetUrl: string): Promise<{
   let stdout: string;
   try {
     const result = await execFileAsync(ytDlpPath, args, {
-      timeout: 30000, // 30 second timeout
-      maxBuffer: 10 * 1024 * 1024, // 10MB buffer for metadata JSON
+      timeout: 30000,
+      maxBuffer: 10 * 1024 * 1024,
     });
     stdout = result.stdout;
   } catch (error: unknown) {
@@ -164,21 +126,24 @@ export async function analyzeVideoUrl(targetUrl: string): Promise<{
       ? rawJson.thumbnails[rawJson.thumbnails.length - 1]?.url
       : null) ||
     null;
-  const topWidth = typeof rawJson.width === 'number' ? rawJson.width : null;
-  const topHeight = typeof rawJson.height === 'number' ? rawJson.height : null;
 
   const rawFormats: RawYtDlpFormat[] = Array.isArray(rawJson.formats) ? rawJson.formats : [];
-  // Filter out audio-only formats if video formats are present
-  const videoFormats = rawFormats.filter((f) => f.vcodec !== 'none');
-  const validFormatsList = videoFormats.length > 0 ? videoFormats : rawFormats;
+  const validVideoFormats = rawFormats.filter(
+    (f) => f.vcodec !== 'none' && typeof f.width === 'number' && f.width > 0 && typeof f.height === 'number' && f.height > 0
+  );
 
-  const normalizedFormats: NormalizedFormat[] = [];
+  const distinctResolutions = new Set(validVideoFormats.map((f) => `${f.width}x${f.height}`));
 
-  if (validFormatsList.length > 0) {
-    for (const f of validFormatsList) {
-      const w = typeof f.width === 'number' ? f.width : null;
-      const h = typeof f.height === 'number' ? f.height : null;
-      const res = determineResolution(w, h, f.resolution || f.format_note);
+  const formats: NormalizedFormat[] = [];
+  let topWidth = typeof rawJson.width === 'number' ? rawJson.width : null;
+  let topHeight = typeof rawJson.height === 'number' ? rawJson.height : null;
+
+  // SCENARIO A: yt-dlp returns multiple real native formats with distinct resolutions
+  if (validVideoFormats.length > 1 && distinctResolutions.size > 1) {
+    for (const f of validVideoFormats) {
+      const w = f.width as number;
+      const h = f.height as number;
+      const quality = getVideoQuality(w, h);
       const filesize =
         typeof f.filesize === 'number' && f.filesize > 0
           ? f.filesize
@@ -186,40 +151,118 @@ export async function analyzeVideoUrl(targetUrl: string): Promise<{
           ? f.filesize_approx
           : null;
 
-      normalizedFormats.push({
-        id: String(f.format_id || 'native-format'),
-        resolution: res,
+      formats.push({
+        id: String(f.format_id || `native-${quality}`),
+        quality,
+        resolution: `${w} × ${h}`,
         width: w,
         height: h,
         filesize,
+        filesizeDisplay: formatFileSizeDisplay(filesize, false),
         source: 'native',
       });
     }
   } else {
-    // Fallback single format mapping from top-level metadata
-    const res = determineResolution(topWidth, topHeight, rawJson.resolution);
-    const filesize =
+    // SCENARIO B: Single format or unknown resolution format -> ffprobe media inspection fallback
+    const directStreamUrl =
+      rawJson.url ||
+      (rawFormats.length > 0 ? rawFormats[rawFormats.length - 1]?.url : null);
+
+    if (directStreamUrl) {
+      try {
+        const probed = await inspectMediaUrl(directStreamUrl);
+        topWidth = probed.width;
+        topHeight = probed.height;
+      } catch (probeErr) {
+        console.warn('ffprobe direct stream inspection fallback warning:', probeErr);
+      }
+    }
+
+    // Default fallback to standard 720x1280 vertical resolution if probe failed
+    if (!topWidth || !topHeight || topWidth <= 0 || topHeight <= 0) {
+      topWidth = 720;
+      topHeight = 1280;
+    }
+
+    const sourceQuality = getVideoQuality(topWidth, topHeight);
+    const nativeFilesize =
       typeof rawJson.filesize === 'number' && rawJson.filesize > 0
         ? rawJson.filesize
         : typeof rawJson.filesize_approx === 'number' && rawJson.filesize_approx > 0
         ? rawJson.filesize_approx
         : null;
 
-    normalizedFormats.push({
-      id: String(rawJson.format_id || 'default'),
-      resolution: res,
-      width: topWidth,
-      height: topHeight,
-      filesize,
-      source: 'native',
-    });
+    if (sourceQuality === '720p') {
+      const dim360 = calculateVariantDimensions(topWidth, topHeight, '360p');
+      const dim480 = calculateVariantDimensions(topWidth, topHeight, '480p');
+      const dim1080 = calculateVariantDimensions(topWidth, topHeight, '1080p');
+
+      formats.push({
+        id: 'gen-360p',
+        quality: '360p',
+        resolution: `${dim360.width} × ${dim360.height}`,
+        width: dim360.width,
+        height: dim360.height,
+        filesize: null,
+        filesizeDisplay: 'Calculated on download',
+        source: 'generated',
+        generatedFrom: '720p',
+      });
+
+      formats.push({
+        id: 'gen-480p',
+        quality: '480p',
+        resolution: `${dim480.width} × ${dim480.height}`,
+        width: dim480.width,
+        height: dim480.height,
+        filesize: null,
+        filesizeDisplay: 'Calculated on download',
+        source: 'generated',
+        generatedFrom: '720p',
+      });
+
+      formats.push({
+        id: String(rawJson.format_id || 'native-720p'),
+        quality: '720p',
+        resolution: `${topWidth} × ${topHeight}`,
+        width: topWidth,
+        height: topHeight,
+        filesize: nativeFilesize,
+        filesizeDisplay: formatFileSizeDisplay(nativeFilesize, false),
+        source: 'native',
+      });
+
+      formats.push({
+        id: 'gen-1080p',
+        quality: '1080p',
+        resolution: `${dim1080.width} × ${dim1080.height}`,
+        width: dim1080.width,
+        height: dim1080.height,
+        filesize: null,
+        filesizeDisplay: 'Calculated on download',
+        source: 'generated',
+        generatedFrom: '720p',
+      });
+    } else {
+      // General fallback if verified source is different (e.g. 480p)
+      formats.push({
+        id: String(rawJson.format_id || `native-${sourceQuality}`),
+        quality: sourceQuality,
+        resolution: `${topWidth} × ${topHeight}`,
+        width: topWidth,
+        height: topHeight,
+        filesize: nativeFilesize,
+        filesizeDisplay: formatFileSizeDisplay(nativeFilesize, false),
+        source: 'native',
+      });
+    }
   }
 
-  // Deduplicate formats by resolution + width + height + filesize
+  // Deduplicate formats by quality + width + height
   const seen = new Set<string>();
   const uniqueFormats: NormalizedFormat[] = [];
-  for (const fmt of normalizedFormats) {
-    const key = `${fmt.resolution}-${fmt.width}-${fmt.height}-${fmt.filesize}`;
+  for (const fmt of formats) {
+    const key = `${fmt.quality}-${fmt.width}-${fmt.height}-${fmt.source}`;
     if (!seen.has(key)) {
       seen.add(key);
       uniqueFormats.push(fmt);

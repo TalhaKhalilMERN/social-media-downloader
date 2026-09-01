@@ -1,6 +1,6 @@
 export type PlatformType = 'reelshort' | 'dramabox';
 
-export type FormatSource = 'native' | 'converted';
+export type FormatSource = 'native' | 'generated';
 
 export interface AnalyzeRequest {
   url: string;
@@ -8,11 +8,14 @@ export interface AnalyzeRequest {
 
 export interface NormalizedFormat {
   id: string;
+  quality: string;
   resolution: string;
   width: number | null;
   height: number | null;
   filesize: number | null;
+  filesizeDisplay: string;
   source: FormatSource;
+  generatedFrom?: string;
 }
 
 export interface NormalizedVideoMetadata {
