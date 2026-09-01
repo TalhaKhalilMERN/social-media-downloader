@@ -1,5 +1,5 @@
 import UrlAnalyzer from '@/components/UrlAnalyzer';
-import { Film } from 'lucide-react';
+import { Film, CheckCircle, AlertTriangle } from 'lucide-react';
 
 export default function Home() {
   return (
@@ -11,19 +11,38 @@ export default function Home() {
 
       {/* Header Container */}
       <header className="w-full max-w-4xl text-center pt-10 pb-8 space-y-4">
-        <div className="inline-flex items-center gap-2.5 px-4 py-2 rounded-full bg-violet-500/10 border border-violet-500/20 text-violet-300 text-xs md:text-sm font-medium mb-2">
+        <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-violet-500/10 border border-violet-500/20 text-violet-300 text-xs md:text-sm font-medium mb-2">
           <Film className="w-4 h-4 text-violet-400" />
-          <span>Server-Side Video Metadata Analyzer</span>
+          <span>Specialized Video Metadata Discovery</span>
         </div>
 
         <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-200 to-slate-400">
-          Video Downloader
+          ReelShort & DramaBox Downloader
         </h1>
 
         <p className="text-slate-400 text-sm md:text-base max-w-2xl mx-auto leading-relaxed">
-          Paste any supported video URL below to analyze streams, inspect available qualities, 
-          and extract video metadata using server-side analysis.
+          Download videos from supported ReelShort and DramaBox episode pages.
         </p>
+
+        {/* Platform Support Info Card */}
+        <div className="pt-2 max-w-xl mx-auto flex flex-col sm:flex-row items-center justify-center gap-3">
+          <div className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-900/90 border border-slate-800 flex items-center justify-center gap-2 text-xs md:text-sm font-semibold text-slate-200">
+            <span className="text-slate-400 font-normal">Supported platforms:</span>
+            <span className="inline-flex items-center gap-1 text-emerald-400">
+              <CheckCircle className="w-3.5 h-3.5" /> ReelShort
+            </span>
+            <span className="text-slate-600">&bull;</span>
+            <span className="inline-flex items-center gap-1 text-emerald-400">
+              <CheckCircle className="w-3.5 h-3.5" /> DramaBox
+            </span>
+          </div>
+        </div>
+
+        {/* Small Notice */}
+        <div className="flex items-center justify-center gap-1.5 text-xs text-amber-400/90 font-medium">
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+          <span>Only ReelShort and DramaBox URLs are currently supported.</span>
+        </div>
       </header>
 
       {/* Main Analyzer Tool */}
@@ -33,7 +52,7 @@ export default function Home() {
 
       {/* Simple Footer */}
       <footer className="w-full max-w-4xl text-center py-6 text-xs text-slate-500 border-t border-slate-900">
-        <p>Video Downloader &bull; Built with Next.js & yt-dlp</p>
+        <p>ReelShort & DramaBox Downloader &bull; Built with Next.js</p>
       </footer>
     </main>
   );

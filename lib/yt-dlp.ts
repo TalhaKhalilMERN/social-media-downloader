@@ -1,8 +1,8 @@
 import { execFile } from 'child_process';
 import fs from 'fs';
-import path from 'path';
 import { promisify } from 'util';
-import { NormalizedFormat, NormalizedVideoMetadata } from '../types/video';
+import { NormalizedFormat, NormalizedVideoMetadata, PlatformType } from '../types/video';
+import { validateSupportedUrl } from './url-validator';
 
 const execFileAsync = promisify(execFile);
 
@@ -34,7 +34,7 @@ function getYtDlpExecutablePath(): string {
 }
 
 /**
- * Formats width & height into human readable resolution (e.g. 720x1280 -> 720p).
+ * Formats width & height into standard quality labels (e.g. 720x1280 -> 720p).
  */
 function determineResolution(
   width?: number | null,
@@ -47,36 +47,71 @@ function determineResolution(
   }
 
   if (rawRes) {
-    // Check if rawRes is formatted like "720x1280" or "1280x720"
     const match = rawRes.match(/(\d+)x(\d+)/i);
     if (match) {
       const w = parseInt(match[1], 10);
       const h = parseInt(match[2], 10);
-      if (!isNaN(w) && !isNaN(h)) {
+      if (!isNaN(w) && !isNaN(h) && w > 0 && h > 0) {
         return `${Math.min(w, h)}p`;
       }
     }
 
-    // Check if rawRes already contains resolution like "720p"
     const pMatch = rawRes.match(/(\d+p)/i);
     if (pMatch) {
       return pMatch[1].toLowerCase();
     }
   }
 
-  return 'Unknown quality';
+  return 'Unknown';
+}
+
+interface RawYtDlpFormat {
+  format_id?: string;
+  width?: number;
+  height?: number;
+  resolution?: string;
+  format_note?: string;
+  filesize?: number;
+  filesize_approx?: number;
+  vcodec?: string;
+}
+
+interface RawYtDlpOutput {
+  title?: string;
+  fulltitle?: string;
+  duration?: number;
+  webpage_url?: string;
+  extractor_key?: string;
+  extractor?: string;
+  thumbnail?: string;
+  thumbnails?: Array<{ url?: string }>;
+  width?: number;
+  height?: number;
+  resolution?: string;
+  format_id?: string;
+  filesize?: number;
+  filesize_approx?: number;
+  formats?: RawYtDlpFormat[];
 }
 
 /**
- * Execute yt-dlp with JSON metadata mode.
+ * Execute yt-dlp with JSON metadata mode for validated ReelShort and DramaBox URLs.
  */
 export async function analyzeVideoUrl(targetUrl: string): Promise<{
+  platform: PlatformType;
   video: NormalizedVideoMetadata;
   formats: NormalizedFormat[];
 }> {
+  // Step 1: Strict URL Validation (Server-side defense)
+  const validation = validateSupportedUrl(targetUrl);
+  if (!validation.isValid || !validation.platform) {
+    throw new Error(validation.error || 'Unsupported website. This downloader currently supports ReelShort and DramaBox only.');
+  }
+
+  const platform = validation.platform;
   const ytDlpPath = getYtDlpExecutablePath();
 
-  // Arguments passed to yt-dlp child process securely as an array
+  // Arguments passed securely to yt-dlp as an array
   const args = [
     '-J',
     '--no-warnings',
@@ -89,80 +124,106 @@ export async function analyzeVideoUrl(targetUrl: string): Promise<{
   try {
     const result = await execFileAsync(ytDlpPath, args, {
       timeout: 30000, // 30 second timeout
-      maxBuffer: 10 * 1024 * 1024, // 10MB buffer for JSON metadata
+      maxBuffer: 10 * 1024 * 1024, // 10MB buffer for metadata JSON
     });
     stdout = result.stdout;
   } catch (error: unknown) {
     const err = error as { code?: string; stderr?: string; message?: string; killed?: boolean };
-    console.error('yt-dlp execution error:', err);
+    console.error(`yt-dlp execution error for ${platform}:`, err);
 
     if (err.killed || err.code === 'ETIMEDOUT') {
-      throw new Error('Analysis timed out. The server took too long to respond.');
+      throw new Error('Analysis timed out while processing video metadata. Please try again.');
     }
 
     if (err.code === 'ENOENT') {
       throw new Error('yt-dlp executable could not be found on the server.');
     }
 
-    const stderrMessage = err.stderr ? err.stderr.split('\n')[0] : err.message || 'Unknown execution error';
-    throw new Error(`yt-dlp process failed: ${stderrMessage}`);
+    throw new Error(`Unable to extract video content from this ${platform === 'reelshort' ? 'ReelShort' : 'DramaBox'} URL.`);
   }
 
-  let rawJson: any;
+  let rawJson: RawYtDlpOutput;
   try {
-    rawJson = JSON.parse(stdout);
+    rawJson = JSON.parse(stdout) as RawYtDlpOutput;
   } catch (e) {
     console.error('Failed to parse yt-dlp JSON output:', e);
-    throw new Error('Invalid metadata response returned by yt-dlp.');
+    throw new Error('Invalid metadata response returned from server extractor.');
   }
 
   if (!rawJson || typeof rawJson !== 'object') {
-    throw new Error('No usable metadata returned from yt-dlp.');
+    throw new Error('No video metadata could be retrieved for this URL.');
   }
 
-  const title = rawJson.title || rawJson.fulltitle || 'Untitled Video';
+  const title = rawJson.title || rawJson.fulltitle || `${platform === 'reelshort' ? 'ReelShort' : 'DramaBox'} Episode`;
   const duration = typeof rawJson.duration === 'number' ? Math.round(rawJson.duration) : null;
   const webpageUrl = rawJson.webpage_url || targetUrl;
-  const extractor = rawJson.extractor_key || rawJson.extractor || 'Unknown Extractor';
-  const thumbnail = rawJson.thumbnail || (Array.isArray(rawJson.thumbnails) && rawJson.thumbnails.length > 0 ? rawJson.thumbnails[rawJson.thumbnails.length - 1]?.url : null) || null;
+  const extractor = rawJson.extractor_key || rawJson.extractor || platform;
+  const thumbnail =
+    rawJson.thumbnail ||
+    (Array.isArray(rawJson.thumbnails) && rawJson.thumbnails.length > 0
+      ? rawJson.thumbnails[rawJson.thumbnails.length - 1]?.url
+      : null) ||
+    null;
   const topWidth = typeof rawJson.width === 'number' ? rawJson.width : null;
   const topHeight = typeof rawJson.height === 'number' ? rawJson.height : null;
 
-  const rawFormats: any[] = Array.isArray(rawJson.formats) ? rawJson.formats : [];
+  const rawFormats: RawYtDlpFormat[] = Array.isArray(rawJson.formats) ? rawJson.formats : [];
+  // Filter out audio-only formats if video formats are present
+  const videoFormats = rawFormats.filter((f) => f.vcodec !== 'none');
+  const validFormatsList = videoFormats.length > 0 ? videoFormats : rawFormats;
+
   const normalizedFormats: NormalizedFormat[] = [];
 
-  if (rawFormats.length > 0) {
-    for (const f of rawFormats) {
+  if (validFormatsList.length > 0) {
+    for (const f of validFormatsList) {
       const w = typeof f.width === 'number' ? f.width : null;
       const h = typeof f.height === 'number' ? f.height : null;
       const res = determineResolution(w, h, f.resolution || f.format_note);
+      const filesize =
+        typeof f.filesize === 'number' && f.filesize > 0
+          ? f.filesize
+          : typeof f.filesize_approx === 'number' && f.filesize_approx > 0
+          ? f.filesize_approx
+          : null;
 
       normalizedFormats.push({
-        formatId: String(f.format_id || 'unknown'),
-        extension: String(f.ext || 'mp4'),
+        id: String(f.format_id || 'native-format'),
+        resolution: res,
         width: w,
         height: h,
-        resolution: res,
-        videoCodec: String(f.vcodec || 'unknown'),
-        audioCodec: String(f.acodec || 'unknown'),
-        protocol: String(f.protocol || 'https'),
-        filesize: typeof f.filesize === 'number' ? f.filesize : (typeof f.filesize_approx === 'number' ? f.filesize_approx : null),
+        filesize,
+        source: 'native',
       });
     }
   } else {
-    // Single format synthesis if yt-dlp returns metadata without a formats array (e.g. single direct stream)
+    // Fallback single format mapping from top-level metadata
     const res = determineResolution(topWidth, topHeight, rawJson.resolution);
+    const filesize =
+      typeof rawJson.filesize === 'number' && rawJson.filesize > 0
+        ? rawJson.filesize
+        : typeof rawJson.filesize_approx === 'number' && rawJson.filesize_approx > 0
+        ? rawJson.filesize_approx
+        : null;
+
     normalizedFormats.push({
-      formatId: String(rawJson.format_id || 'default'),
-      extension: String(rawJson.ext || 'mp4'),
+      id: String(rawJson.format_id || 'default'),
+      resolution: res,
       width: topWidth,
       height: topHeight,
-      resolution: res,
-      videoCodec: String(rawJson.vcodec || 'unknown'),
-      audioCodec: String(rawJson.acodec || 'unknown'),
-      protocol: String(rawJson.protocol || 'https'),
-      filesize: typeof rawJson.filesize === 'number' ? rawJson.filesize : null,
+      filesize,
+      source: 'native',
     });
+  }
+
+  // Deduplicate formats by resolution + width + height + filesize
+  const seen = new Set<string>();
+  const uniqueFormats: NormalizedFormat[] = [];
+  for (const fmt of normalizedFormats) {
+    const key = `${fmt.resolution}-${fmt.width}-${fmt.height}-${fmt.filesize}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      uniqueFormats.push(fmt);
+    }
   }
 
   const videoMetadata: NormalizedVideoMetadata = {
@@ -173,10 +234,12 @@ export async function analyzeVideoUrl(targetUrl: string): Promise<{
     thumbnail,
     width: topWidth,
     height: topHeight,
+    platform,
   };
 
   return {
+    platform,
     video: videoMetadata,
-    formats: normalizedFormats,
+    formats: uniqueFormats,
   };
 }

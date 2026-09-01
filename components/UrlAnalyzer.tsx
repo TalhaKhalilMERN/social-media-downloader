@@ -13,16 +13,18 @@ import {
   Clipboard, 
   XCircle,
   FileVideo,
-  Monitor,
-  Layers
+  Download,
+  Info
 } from 'lucide-react';
 import { AnalyzeResponse, NormalizedFormat } from '@/types/video';
+import { validateSupportedUrl } from '@/lib/url-validator';
 
 export default function UrlAnalyzer() {
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
+  const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
 
   const handlePaste = async () => {
     try {
@@ -31,7 +33,7 @@ export default function UrlAnalyzer() {
         setUrl(text.trim());
         setError(null);
       }
-    } catch (err) {
+    } catch {
       // Clipboard access denied or unsupported
     }
   };
@@ -40,31 +42,19 @@ export default function UrlAnalyzer() {
     setUrl('');
     setError(null);
     setResult(null);
-  };
-
-  const validateInput = (inputUrl: string): string | null => {
-    const trimmed = inputUrl.trim();
-    if (!trimmed) {
-      return 'Please enter or paste a video URL.';
-    }
-    try {
-      const parsed = new URL(trimmed);
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        return 'URL must start with http:// or https://';
-      }
-    } catch (e) {
-      return 'Please enter a syntactically valid URL (e.g. https://example.com/video).';
-    }
-    return null;
+    setDownloadNotice(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const validationError = validateInput(url);
-    if (validationError) {
-      setError(validationError);
+    setDownloadNotice(null);
+
+    // Step 1: Client-side domain validation (Stop immediately for unsupported sites)
+    const validation = validateSupportedUrl(url);
+    if (!validation.isValid) {
+      setError(validation.error || 'Unsupported website. This downloader currently supports ReelShort and DramaBox only.');
       setResult(null);
-      return;
+      return; // Do NOT call format-discovery backend
     }
 
     setLoading(true);
@@ -83,16 +73,23 @@ export default function UrlAnalyzer() {
       const data: AnalyzeResponse = await response.json();
 
       if (!response.ok || !data.success) {
-        setError(data.error || 'Failed to analyze video. Please try again.');
+        setError(data.error || 'Failed to analyze video. Please check the URL and try again.');
       } else {
         setResult(data);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Fetch error:', err);
       setError('Network connection error or server unreachable.');
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleDownloadClick = (fmt: NormalizedFormat) => {
+    const resText = fmt.width && fmt.height ? `${fmt.width}×${fmt.height}` : fmt.resolution;
+    setDownloadNotice(
+      `Download feature for ${fmt.resolution} (${resText}) is coming soon! File delivery is in development.`
+    );
   };
 
   const formatDuration = (seconds?: number | null) => {
@@ -107,12 +104,16 @@ export default function UrlAnalyzer() {
   };
 
   const formatFileSize = (bytes?: number | null) => {
-    if (bytes === undefined || bytes === null) return 'N/A';
-    const mb = bytes / (1024 * 1024);
+    if (bytes === undefined || bytes === null || bytes <= 0) return 'Size unavailable';
+    const kb = bytes / 1024;
+    const mb = kb / 1024;
     if (mb >= 1024) {
-      return `${(mb / 1024).toFixed(2)} GB`;
+      return `~${(mb / 1024).toFixed(1)} GB`;
     }
-    return `${mb.toFixed(1)} MB`;
+    if (mb >= 1) {
+      return `~${mb.toFixed(1)} MB`;
+    }
+    return `~${kb.toFixed(0)} KB`;
   };
 
   return (
@@ -123,7 +124,7 @@ export default function UrlAnalyzer() {
           <div className="flex flex-col space-y-2">
             <label htmlFor="video-url-input" className="text-sm font-semibold text-slate-300 flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-violet-400" />
-              Target Video URL
+              ReelShort or DramaBox Video URL
             </label>
 
             <div className="relative flex items-center">
@@ -135,7 +136,7 @@ export default function UrlAnalyzer() {
                   setUrl(e.target.value);
                   if (error) setError(null);
                 }}
-                placeholder="Paste video link here (e.g. https://www.dramabox.com/...)"
+                placeholder="Paste a ReelShort or DramaBox episode URL..."
                 disabled={loading}
                 className="w-full pl-4 pr-24 py-4 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-violet-500 transition-all text-sm md:text-base disabled:opacity-50"
               />
@@ -194,9 +195,26 @@ export default function UrlAnalyzer() {
         <div className="rounded-xl bg-red-950/40 border border-red-900/60 p-4 md:p-5 text-red-200 flex items-start gap-3 shadow-lg animate-fadeIn">
           <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
           <div className="space-y-1">
-            <h4 className="font-semibold text-red-300 text-sm">Analysis Failed</h4>
+            <h4 className="font-semibold text-red-300 text-sm">Validation Error</h4>
             <p className="text-sm text-red-300/80">{error}</p>
           </div>
+        </div>
+      )}
+
+      {/* Temporary Download Notice */}
+      {downloadNotice && (
+        <div className="rounded-xl bg-violet-950/40 border border-violet-800/60 p-4 text-violet-200 flex items-center justify-between gap-3 shadow-lg animate-fadeIn">
+          <div className="flex items-center gap-2.5 text-sm">
+            <Info className="w-4 h-4 text-violet-400 shrink-0" />
+            <span>{downloadNotice}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDownloadNotice(null)}
+            className="text-xs px-2 py-1 rounded bg-violet-900/50 hover:bg-violet-800/50 text-violet-300 transition-colors shrink-0 cursor-pointer"
+          >
+            Dismiss
+          </button>
         </div>
       )}
 
@@ -224,15 +242,16 @@ export default function UrlAnalyzer() {
                 <CheckCircle2 className="w-5 h-5" />
                 Analysis Complete
               </div>
-              <span className="text-xs px-3 py-1 rounded-full bg-violet-500/10 border border-violet-500/30 text-violet-300 font-medium flex items-center gap-1.5">
+              <span className="text-xs px-3 py-1 rounded-full bg-violet-500/10 border border-violet-500/30 text-violet-300 font-medium flex items-center gap-1.5 capitalize">
                 <Globe className="w-3.5 h-3.5" />
-                Source: {result.video.extractor}
+                Platform: {result.platform || result.video.platform}
               </span>
             </div>
 
             <div className="flex flex-col md:flex-row gap-6">
               {result.video.thumbnail ? (
                 <div className="relative w-full md:w-72 aspect-video md:aspect-auto md:h-44 rounded-xl overflow-hidden bg-slate-950 border border-slate-800 shrink-0 group">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={result.video.thumbnail}
                     alt={result.video.title}
@@ -267,7 +286,7 @@ export default function UrlAnalyzer() {
                   </a>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-2">
+                <div className="grid grid-cols-2 gap-3 pt-2">
                   <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
                     <span className="text-xs text-slate-400 block mb-0.5">Duration</span>
                     <span className="text-sm font-semibold text-slate-200 flex items-center gap-1.5">
@@ -279,18 +298,9 @@ export default function UrlAnalyzer() {
                   <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
                     <span className="text-xs text-slate-400 block mb-0.5">Source Dimension</span>
                     <span className="text-sm font-semibold text-slate-200 flex items-center gap-1.5">
-                      <Monitor className="w-4 h-4 text-indigo-400" />
                       {result.video.width && result.video.height
-                        ? `${result.video.width}×${result.video.height}`
+                        ? `${result.video.width} × ${result.video.height}`
                         : 'N/A'}
-                    </span>
-                  </div>
-
-                  <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
-                    <span className="text-xs text-slate-400 block mb-0.5">Detected Formats</span>
-                    <span className="text-sm font-semibold text-slate-200 flex items-center gap-1.5">
-                      <Layers className="w-4 h-4 text-purple-400" />
-                      {result.formats ? result.formats.length : 0} Streams
                     </span>
                   </div>
                 </div>
@@ -303,10 +313,10 @@ export default function UrlAnalyzer() {
             <div className="flex items-center justify-between">
               <h4 className="text-base font-bold text-slate-100 flex items-center gap-2">
                 <FileVideo className="w-5 h-5 text-violet-400" />
-                Available Stream Formats
+                Available Formats
               </h4>
               <span className="text-xs text-slate-400">
-                Detected via yt-dlp
+                Discovered qualities
               </span>
             </div>
 
@@ -315,36 +325,35 @@ export default function UrlAnalyzer() {
                 <table className="w-full text-left text-sm text-slate-300">
                   <thead className="bg-slate-950/80 text-xs font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-800">
                     <tr>
-                      <th className="py-3.5 px-4">Quality</th>
-                      <th className="py-3.5 px-4">Resolution</th>
-                      <th className="py-3.5 px-4">Container</th>
-                      <th className="py-3.5 px-4">Codecs (V / A)</th>
-                      <th className="py-3.5 px-4">Protocol</th>
-                      <th className="py-3.5 px-4 text-right">Estimated Size</th>
+                      <th className="py-3.5 px-6">Quality</th>
+                      <th className="py-3.5 px-6">Resolution</th>
+                      <th className="py-3.5 px-6">Approx. Size</th>
+                      <th className="py-3.5 px-6 text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 bg-slate-950/40">
                     {result.formats.map((fmt: NormalizedFormat, idx: number) => (
-                      <tr key={`${fmt.formatId}-${idx}`} className="hover:bg-slate-800/30 transition-colors">
-                        <td className="py-3.5 px-4 font-bold text-slate-100">
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold bg-violet-500/20 text-violet-300 border border-violet-500/30">
+                      <tr key={`${fmt.id}-${idx}`} className="hover:bg-slate-800/30 transition-colors">
+                        <td className="py-4 px-6 font-bold text-slate-100">
+                          <span className="inline-flex items-center px-3 py-1 rounded-md text-xs font-bold bg-violet-500/20 text-violet-300 border border-violet-500/30">
                             {fmt.resolution}
                           </span>
                         </td>
-                        <td className="py-3.5 px-4 text-slate-300 font-mono text-xs">
-                          {fmt.width && fmt.height ? `${fmt.width}×${fmt.height}` : 'N/A'}
+                        <td className="py-4 px-6 text-slate-300 font-mono text-xs">
+                          {fmt.width && fmt.height ? `${fmt.width} × ${fmt.height}` : 'N/A'}
                         </td>
-                        <td className="py-3.5 px-4 uppercase font-semibold text-xs text-slate-400">
-                          {fmt.extension}
-                        </td>
-                        <td className="py-3.5 px-4 text-xs font-mono text-slate-400 truncate max-w-[180px]" title={`${fmt.videoCodec} / ${fmt.audioCodec}`}>
-                          {fmt.videoCodec} / {fmt.audioCodec}
-                        </td>
-                        <td className="py-3.5 px-4 text-xs text-slate-400 font-mono">
-                          {fmt.protocol}
-                        </td>
-                        <td className="py-3.5 px-4 text-right font-mono text-xs text-slate-300">
+                        <td className="py-4 px-6 font-mono text-xs text-slate-300">
                           {formatFileSize(fmt.filesize)}
+                        </td>
+                        <td className="py-4 px-6 text-right">
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadClick(fmt)}
+                            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white font-medium text-xs shadow-md transition-all cursor-pointer"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Download
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -353,7 +362,7 @@ export default function UrlAnalyzer() {
               </div>
             ) : (
               <div className="p-6 text-center text-slate-400 bg-slate-950/40 rounded-xl border border-slate-800 text-sm">
-                No individual stream formats detected for this video.
+                No video formats detected for this URL.
               </div>
             )}
           </div>

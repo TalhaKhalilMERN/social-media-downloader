@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { analyzeVideoUrl } from '@/lib/yt-dlp';
+import { validateSupportedUrl } from '@/lib/url-validator';
 import { AnalyzeResponse } from '@/types/video';
 
 export async function POST(request: NextRequest): Promise<NextResponse<AnalyzeResponse>> {
-  let body: any;
+  let body: { url?: string };
   try {
     body = await request.json();
-  } catch (err) {
+  } catch {
     return NextResponse.json(
       {
         success: false,
@@ -18,53 +19,31 @@ export async function POST(request: NextRequest): Promise<NextResponse<AnalyzeRe
 
   const { url } = body || {};
 
-  if (!url || typeof url !== 'string' || !url.trim()) {
+  // Step 1: Server-side URL Validation
+  const validation = validateSupportedUrl(url || '');
+  if (!validation.isValid) {
     return NextResponse.json(
       {
         success: false,
-        error: 'A target URL is required.',
-      },
-      { status: 400 }
-    );
-  }
-
-  const trimmedUrl = url.trim();
-
-  // Syntactical URL validation
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(trimmedUrl);
-  } catch (e) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: 'The provided URL is syntactically invalid.',
-      },
-      { status: 400 }
-    );
-  }
-
-  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-    return NextResponse.json(
-      {
-        success: false,
-        error: 'Only HTTP and HTTPS URLs are supported.',
+        error: validation.error || 'Unsupported website. This downloader currently supports ReelShort and DramaBox only.',
       },
       { status: 400 }
     );
   }
 
   try {
-    const { video, formats } = await analyzeVideoUrl(trimmedUrl);
+    const { platform, video, formats } = await analyzeVideoUrl(validation.normalizedUrl || url || '');
 
     return NextResponse.json({
       success: true,
+      platform,
       video,
       formats,
     });
-  } catch (error: any) {
-    const errorMessage = error?.message || 'Unknown analysis error';
-    console.error(`[API /api/analyze Error] URL: ${trimmedUrl} - ${errorMessage}`);
+  } catch (error: unknown) {
+    const err = error as { message?: string };
+    const errorMessage = err?.message || 'Unknown extraction error';
+    console.error(`[API /api/analyze Error] URL: ${url} - ${errorMessage}`);
 
     if (errorMessage.includes('timed out')) {
       return NextResponse.json(
@@ -86,22 +65,14 @@ export async function POST(request: NextRequest): Promise<NextResponse<AnalyzeRe
       );
     }
 
-    if (errorMessage.includes('process failed') || errorMessage.includes('Unsupported')) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'Could not extract video metadata. Please check if the URL is accessible and contains valid video content.',
-        },
-        { status: 422 }
-      );
-    }
-
     return NextResponse.json(
       {
         success: false,
-        error: 'An unexpected server error occurred during video analysis.',
+        error: errorMessage.includes('Unsupported')
+          ? errorMessage
+          : 'Could not extract video metadata. Please verify that the URL is a valid, publicly accessible episode page.',
       },
-      { status: 500 }
+      { status: 422 }
     );
   }
 }

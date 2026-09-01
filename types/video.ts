@@ -1,17 +1,18 @@
+export type PlatformType = 'reelshort' | 'dramabox';
+
+export type FormatSource = 'native' | 'converted';
+
 export interface AnalyzeRequest {
   url: string;
 }
 
 export interface NormalizedFormat {
-  formatId: string;
-  extension: string;
+  id: string;
+  resolution: string;
   width: number | null;
   height: number | null;
-  resolution: string;
-  videoCodec: string;
-  audioCodec: string;
-  protocol: string;
-  filesize?: number | null;
+  filesize: number | null;
+  source: FormatSource;
 }
 
 export interface NormalizedVideoMetadata {
@@ -22,10 +23,12 @@ export interface NormalizedVideoMetadata {
   thumbnail: string | null;
   width: number | null;
   height: number | null;
+  platform: PlatformType;
 }
 
 export interface AnalyzeResponse {
   success: boolean;
+  platform?: PlatformType;
   video?: NormalizedVideoMetadata;
   formats?: NormalizedFormat[];
   error?: string;
