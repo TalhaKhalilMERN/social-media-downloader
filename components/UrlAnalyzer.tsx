@@ -16,7 +16,7 @@ import {
   Download,
   Info
 } from 'lucide-react';
-import { AnalyzeResponse, NormalizedFormat } from '@/types/video';
+import { AnalyzeResponse, NormalizedFormat, PlatformType } from '@/types/video';
 import { validateSupportedUrl } from '@/lib/url-validator';
 
 export default function UrlAnalyzer() {
@@ -24,6 +24,8 @@ export default function UrlAnalyzer() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
+  const [downloadingFormatId, setDownloadingFormatId] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<{ formatId: string; message: string } | null>(null);
 
   const handlePaste = async () => {
     try {
@@ -41,6 +43,7 @@ export default function UrlAnalyzer() {
     setUrl('');
     setError(null);
     setResult(null);
+    setDownloadError(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -51,12 +54,13 @@ export default function UrlAnalyzer() {
     if (!validation.isValid) {
       setError(validation.error || 'Unsupported website. This downloader currently supports ReelShort and DramaBox only.');
       setResult(null);
-      return; // Do NOT call format-discovery backend
+      return;
     }
 
     setLoading(true);
     setError(null);
     setResult(null);
+    setDownloadError(null);
 
     try {
       const response = await fetch('/api/analyze', {
@@ -82,18 +86,97 @@ export default function UrlAnalyzer() {
     }
   };
 
-  const handleDownloadClick = (fmt: NormalizedFormat) => {
-    if (!url.trim()) return;
+  const handleDownloadClick = async (fmt: NormalizedFormat) => {
+    if (!url.trim() || downloadingFormatId) return;
+
+    setDownloadingFormatId(fmt.id);
+    setDownloadError(null);
+
     const downloadApiUrl = `/api/download?url=${encodeURIComponent(url.trim())}&quality=${encodeURIComponent(fmt.quality)}&source=${encodeURIComponent(fmt.source)}`;
-    
-    // Trigger file attachment download cleanly without mutating window.location directly
-    const link = document.createElement('a');
-    link.href = downloadApiUrl;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const currentPlatform = result?.platform || result?.video?.platform;
+
+    // PATH A: Native Direct MP4 (e.g. DramaBox direct .mp4 URL)
+    // Uses direct download anchor trigger for progressive browser downloading without JS Blob memory buffering
+    if (currentPlatform === 'dramabox' && fmt.source === 'native') {
+      try {
+        const link = document.createElement('a');
+        link.style.display = 'none';
+        link.href = downloadApiUrl;
+        link.download = `${currentPlatform}-${fmt.quality}.mp4`;
+        document.body.appendChild(link);
+        link.click();
+
+        // Keep loading state active while server resolves stream (~5s), then clear
+        setTimeout(() => {
+          if (document.body.contains(link)) {
+            document.body.removeChild(link);
+          }
+          setDownloadingFormatId(null);
+        }, 6000);
+      } catch (err) {
+        console.error('Direct download trigger error:', err);
+        setDownloadError({
+          formatId: fmt.id,
+          message: 'Could not initiate direct download. Please try again.',
+        });
+        setDownloadingFormatId(null);
+      }
+      return;
+    }
+
+    // PATH B & PATH C: ReelShort HLS Remux or Generated Variants (360p, 480p, 1080p)
+    // Server processes video into temporary file, frontend receives and triggers download
+    try {
+      const response = await fetch(downloadApiUrl);
+
+      if (!response.ok) {
+        let errorMsg = 'The download couldn\'t be completed. Please try again.';
+        try {
+          const errorJson = await response.json();
+          if (errorJson?.error) {
+            errorMsg = errorJson.error;
+          }
+        } catch {
+          // Fallback if response is not JSON
+        }
+        setDownloadError({ formatId: fmt.id, message: errorMsg });
+        return;
+      }
+
+      // Parse filename from Content-Disposition header if available
+      let fileName = `${currentPlatform || 'video'}-${fmt.quality}.mp4`;
+      const disposition = response.headers.get('Content-Disposition');
+      if (disposition && disposition.includes('filename=')) {
+        const match = disposition.match(/filename="?([^";]+)"?/);
+        if (match && match[1]) {
+          fileName = match[1];
+        }
+      }
+
+      // Read response as Blob for generated/remuxed file delivery
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+
+      // Create hidden element to trigger browser attachment save without navigating away
+      const link = document.createElement('a');
+      link.style.display = 'none';
+      link.href = blobUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+
+      // Cleanup DOM node and blob URL
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err: unknown) {
+      console.error('Download preparation error:', err);
+      setDownloadError({
+        formatId: fmt.id,
+        message: 'Network error occurred while preparing download. Please try again.',
+      });
+    } finally {
+      setDownloadingFormatId(null);
+    }
   };
 
   const formatDuration = (seconds?: number | null) => {
@@ -105,6 +188,31 @@ export default function UrlAnalyzer() {
       return `${hrs}h ${mins.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`;
     }
     return `${mins}m ${secs.toString().padStart(2, '0')}s`;
+  };
+
+  const activeFmt = result?.formats?.find((f) => f.id === downloadingFormatId) || null;
+  const currentPlatform = result?.platform || result?.video?.platform;
+
+  const getStatusTitle = (platform?: PlatformType, fmt?: NormalizedFormat | null): string => {
+    if (!fmt) return 'Preparing download...';
+    if (fmt.source === 'generated') {
+      return `Generating ${fmt.quality} download...`;
+    }
+    if (platform === 'reelshort') {
+      return `Preparing ${fmt.quality} download...`;
+    }
+    return 'Preparing download...';
+  };
+
+  const getStatusSubtitle = (platform?: PlatformType, fmt?: NormalizedFormat | null): string => {
+    if (!fmt) return 'Please wait while your download is prepared.';
+    if (fmt.source === 'generated') {
+      return 'This may take 15–20 seconds depending on the video size.';
+    }
+    if (platform === 'reelshort') {
+      return 'This may take a few moments while the video is prepared.';
+    }
+    return 'Initiating direct stream download.';
   };
 
   return (
@@ -307,44 +415,95 @@ export default function UrlAnalyzer() {
             </div>
 
             {result.formats && result.formats.length > 0 ? (
-              <div className="overflow-x-auto rounded-xl border border-slate-800">
-                <table className="w-full text-left text-sm text-slate-300">
-                  <thead className="bg-slate-950/80 text-xs font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-800">
-                    <tr>
-                      <th className="py-3.5 px-6">Quality</th>
-                      <th className="py-3.5 px-6">Resolution</th>
-                      <th className="py-3.5 px-6">Approx. Size</th>
-                      <th className="py-3.5 px-6 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/60 bg-slate-950/40">
-                    {result.formats.map((fmt: NormalizedFormat, idx: number) => (
-                      <tr key={`${fmt.id}-${idx}`} className="hover:bg-slate-800/30 transition-colors">
-                        <td className="py-4 px-6 font-bold text-slate-100">
-                          <span className="inline-flex items-center px-3 py-1 rounded-md text-xs font-bold bg-violet-500/20 text-violet-300 border border-violet-500/30">
-                            {fmt.quality}
-                          </span>
-                        </td>
-                        <td className="py-4 px-6 text-slate-300 font-mono text-xs">
-                          {fmt.resolution}
-                        </td>
-                        <td className="py-4 px-6 font-mono text-xs text-slate-300">
-                          {fmt.filesizeDisplay}
-                        </td>
-                        <td className="py-4 px-6 text-right">
-                          <button
-                            type="button"
-                            onClick={() => handleDownloadClick(fmt)}
-                            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white font-medium text-xs shadow-md transition-all cursor-pointer"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                            Download
-                          </button>
-                        </td>
+              <div className="space-y-4">
+                <div className="overflow-x-auto rounded-xl border border-slate-800">
+                  <table className="w-full text-left text-sm text-slate-300">
+                    <thead className="bg-slate-950/80 text-xs font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-800">
+                      <tr>
+                        <th className="py-3.5 px-6  text-center">Quality</th>
+                        <th className="py-3.5 px-6  text-center">Resolution</th>
+                        {/* <th className="py-3.5 px-6">Approx. Size</th> */}
+                        <th className="py-3.5 px-6 text-center">Action</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 bg-slate-950/40">
+                      {result.formats.map((fmt: NormalizedFormat, idx: number) => {
+                        const isDownloadingThis = downloadingFormatId === fmt.id;
+
+                        return (
+                          <tr key={`${fmt.id}-${idx}`} className="hover:bg-slate-800/30 transition-colors">
+                            <td className="py-4 px-6 font-bold text-slate-100 text-center">
+                              <span className="inline-flex items-center px-3 py-1 rounded-md text-xs font-bold bg-violet-500/20 text-violet-300 border border-violet-500/30">
+                                {fmt.quality}
+                              </span>
+                            </td>
+                            <td className="py-4 px-6 text-slate-300 font-mono text-xs text-center">
+                              {fmt.resolution}
+                            </td>
+                            {/* <td className="py-4 px-6 font-mono text-xs text-slate-300">
+                              {fmt.filesizeDisplay}
+                            </td> */}
+                            <td className="py-4 px-6 text-center">
+                              <button
+                                type="button"
+                                disabled={!!downloadingFormatId}
+                                onClick={() => handleDownloadClick(fmt)}
+                                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white font-medium text-xs shadow-md transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                {isDownloadingThis ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-200" />
+                                    Processing...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Download className="w-3.5 h-3.5" />
+                                    Download
+                                  </>
+                                )}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Status Indicator Banner Below Table */}
+                {downloadingFormatId && (
+                  <div className="rounded-xl bg-slate-950/80 border border-violet-500/30 p-5 text-slate-200 flex items-start gap-4 shadow-xl animate-fadeIn">
+                    <div className="p-2.5 rounded-lg bg-violet-500/10 border border-violet-500/20 text-violet-400 shrink-0 mt-0.5">
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                    </div>
+                    <div className="space-y-1 min-w-0 flex-1">
+                      <h5 className="font-bold text-sm text-slate-100 flex items-center gap-2">
+                        {getStatusTitle(currentPlatform, activeFmt)}
+                      </h5>
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        {getStatusSubtitle(currentPlatform, activeFmt)}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Error Banner Below Table */}
+                {downloadError && (
+                  <div className="rounded-xl bg-red-950/40 border border-red-900/60 p-4 text-red-200 flex items-start gap-3 shadow-lg animate-fadeIn">
+                    <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5 flex-1">
+                      <h5 className="font-semibold text-red-300 text-sm">Download Error</h5>
+                      <p className="text-xs text-red-300/80">{downloadError.message}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setDownloadError(null)}
+                      className="text-red-400 hover:text-red-200 transition-colors p-1 cursor-pointer"
+                    >
+                      <XCircle className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="p-6 text-center text-slate-400 bg-slate-950/40 rounded-xl border border-slate-800 text-sm">

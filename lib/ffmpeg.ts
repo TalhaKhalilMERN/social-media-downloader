@@ -13,14 +13,72 @@ export interface GenerateVariantOptions {
 }
 
 /**
- * Transcodes a video file to the requested resolution variant using FFmpeg.
+ * Remuxes or converts an HLS (.m3u8) stream URL into a playable MP4 file.
+ * Prefers fast stream copying (-c copy) for speed and quality preservation.
+ * Falls back to re-encoding if stream copy fails.
+ */
+export async function remuxHlsToMp4(inputUrl: string, outputPath: string): Promise<void> {
+  const ffmpegPath = getFfmpegPath();
+
+  // Attempt 1: Fast stream copy without re-encoding
+  const copyArgs = [
+    '-y',
+    '-i',
+    inputUrl,
+    '-c',
+    'copy',
+    '-movflags',
+    '+faststart',
+    outputPath,
+  ];
+
+  try {
+    await execFileAsync(ffmpegPath, copyArgs, {
+      timeout: 120000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    return;
+  } catch (copyError) {
+    console.warn('FFmpeg HLS stream copy failed, falling back to re-encoding:', copyError);
+  }
+
+  // Attempt 2: Fallback re-encode to H.264 / AAC
+  const transcodeArgs = [
+    '-y',
+    '-i',
+    inputUrl,
+    '-c:v',
+    'libx264',
+    '-preset',
+    'fast',
+    '-crf',
+    '23',
+    '-c:a',
+    'aac',
+    '-movflags',
+    '+faststart',
+    outputPath,
+  ];
+
+  try {
+    await execFileAsync(ffmpegPath, transcodeArgs, {
+      timeout: 180000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } catch (transcodeError) {
+    console.error('FFmpeg HLS transcode error:', transcodeError);
+    throw new Error("We couldn't process this HLS video stream right now. Please try again.");
+  }
+}
+
+/**
+ * Transcodes a video stream URL or media file to the requested resolution variant using FFmpeg.
  * Verifies the resulting generated file dimensions with ffprobe upon completion.
  */
 export async function generateVideoVariant(options: GenerateVariantOptions): Promise<void> {
   const { inputPath, outputPath, targetWidth, targetHeight } = options;
   const ffmpegPath = getFfmpegPath();
 
-  // Arguments array passed securely to execFile
   const args = [
     '-y',
     '-i',
@@ -34,13 +92,15 @@ export async function generateVideoVariant(options: GenerateVariantOptions): Pro
     '-crf',
     '23',
     '-c:a',
-    'copy',
+    'aac',
+    '-movflags',
+    '+faststart',
     outputPath,
   ];
 
   try {
     await execFileAsync(ffmpegPath, args, {
-      timeout: 120000, // 2 minutes timeout for transcoding
+      timeout: 180000,
       maxBuffer: 10 * 1024 * 1024,
     });
   } catch (error) {

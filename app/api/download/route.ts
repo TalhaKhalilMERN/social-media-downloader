@@ -5,7 +5,7 @@ import os from 'os';
 import { validateSupportedUrl } from '@/lib/url-validator';
 import { analyzeVideoUrl } from '@/lib/yt-dlp';
 import { calculateVariantDimensions, TargetQuality } from '@/lib/quality';
-import { generateVideoVariant } from '@/lib/ffmpeg';
+import { generateVideoVariant, remuxHlsToMp4 } from '@/lib/ffmpeg';
 import { getYtDlpPath } from '@/lib/binaries';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -58,43 +58,66 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       throw new Error('Could not retrieve direct media stream URL.');
     }
 
+    const isHlsStream = trimmedStreamUrl.includes('.m3u8') || trimmedStreamUrl.includes('m3u8');
+
     if (source === 'native') {
-      // Native download: Stream direct video to browser
-      const response = await fetch(trimmedStreamUrl);
-      if (!response.ok || !response.body) {
-        throw new Error('Failed to fetch native media stream.');
-      }
+      if (!isHlsStream) {
+        // Native Direct MP4 Download (e.g. DramaBox direct .mp4 URL)
+        const response = await fetch(trimmedStreamUrl, {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          },
+        });
+        if (!response.ok || !response.body) {
+          throw new Error('Failed to fetch native media stream.');
+        }
 
-      return new NextResponse(response.body as unknown as ReadableStream, {
-        status: 200,
-        headers: {
-          'Content-Type': 'video/mp4',
-          'Content-Disposition': `attachment; filename="${fileName}"`,
-        },
-      });
+        return new NextResponse(response.body as unknown as ReadableStream, {
+          status: 200,
+          headers: {
+            'Content-Type': 'video/mp4',
+            'Content-Disposition': `attachment; filename="${fileName}"`,
+            'Access-Control-Expose-Headers': 'Content-Disposition',
+          },
+        });
+      } else {
+        // Native HLS Stream Download (e.g. ReelShort .m3u8 URL)
+        tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'downloader-'));
+        const outputFilePath = path.join(tempDir, fileName);
+
+        // Process HLS manifest stream into playable MP4
+        await remuxHlsToMp4(trimmedStreamUrl, outputFilePath);
+
+        const mp4Buffer = await fs.promises.readFile(outputFilePath);
+
+        // Asynchronous temp file cleanup
+        await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+        tempDir = null;
+
+        return new NextResponse(mp4Buffer, {
+          status: 200,
+          headers: {
+            'Content-Type': 'video/mp4',
+            'Content-Disposition': `attachment; filename="${fileName}"`,
+            'Content-Length': String(mp4Buffer.byteLength),
+            'Access-Control-Expose-Headers': 'Content-Disposition',
+          },
+        });
+      }
     } else {
-      // Generated download: FFmpeg temporary video variant processing
+      // Generated Download Variants (360p, 480p, 1080p)
       tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'downloader-'));
-      const inputFilePath = path.join(tempDir, 'input_source.mp4');
       const outputFilePath = path.join(tempDir, `output_${quality}.mp4`);
-
-      // Download source video to temporary input file
-      const sourceRes = await fetch(trimmedStreamUrl);
-      if (!sourceRes.ok || !sourceRes.body) {
-        throw new Error('Failed to download source stream for transcoding.');
-      }
-
-      const buffer = Buffer.from(await sourceRes.arrayBuffer());
-      await fs.promises.writeFile(inputFilePath, buffer);
 
       // Determine variant dimensions
       const sourceW = video.width || 720;
       const sourceH = video.height || 1280;
       const targetDims = calculateVariantDimensions(sourceW, sourceH, quality);
 
-      // Transcode variant via FFmpeg
+      // Transcode variant directly from stream URL via FFmpeg
       await generateVideoVariant({
-        inputPath: inputFilePath,
+        inputPath: trimmedStreamUrl,
         outputPath: outputFilePath,
         targetWidth: targetDims.width,
         targetHeight: targetDims.height,
