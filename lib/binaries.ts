@@ -1,24 +1,16 @@
 import fs from 'fs';
 
 const FALLBACK_YTDLP_PATHS = [
-  'C:\\Users\\talha\\Downloads\\yt-dlp.exe',
-  'C:\\yt-dlp.exe',
   '/usr/local/bin/yt-dlp',
   '/usr/bin/yt-dlp',
 ];
 
 const FALLBACK_FFMPEG_PATHS = [
-  'C:\\Users\\talha\\Downloads\\ffmpeg-9.0.1-essentials_build\\ffmpeg-9.0.1-essentials_build\\bin\\ffmpeg.exe',
-  'C:\\ffmpeg\\bin\\ffmpeg.exe',
-  'C:\\ffmpeg.exe',
   '/usr/local/bin/ffmpeg',
   '/usr/bin/ffmpeg',
 ];
 
 const FALLBACK_FFPROBE_PATHS = [
-  'C:\\Users\\talha\\Downloads\\ffmpeg-9.0.1-essentials_build\\ffmpeg-9.0.1-essentials_build\\bin\\ffprobe.exe',
-  'C:\\ffmpeg\\bin\\ffprobe.exe',
-  'C:\\ffmpeg.exe',
   '/usr/local/bin/ffprobe',
   '/usr/bin/ffprobe',
 ];

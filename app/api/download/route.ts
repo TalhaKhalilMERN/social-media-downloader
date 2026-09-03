@@ -12,6 +12,46 @@ import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Streams a local media file from disk to the client via Web ReadableStream
+ * without buffering the full file into Node RAM memory.
+ * Automatically cleans up the temporary working directory upon stream end, error, or cancellation.
+ */
+function streamFileResponse(filePath: string, dirToCleanup: string, fileName: string): NextResponse {
+  const stat = fs.statSync(filePath);
+  const fileStream = fs.createReadStream(filePath);
+
+  const webStream = new ReadableStream({
+    start(controller) {
+      fileStream.on('data', (chunk) => {
+        controller.enqueue(chunk);
+      });
+      fileStream.on('end', () => {
+        controller.close();
+        fs.promises.rm(dirToCleanup, { recursive: true, force: true }).catch(() => {});
+      });
+      fileStream.on('error', (err) => {
+        controller.error(err);
+        fs.promises.rm(dirToCleanup, { recursive: true, force: true }).catch(() => {});
+      });
+    },
+    cancel() {
+      fileStream.destroy();
+      fs.promises.rm(dirToCleanup, { recursive: true, force: true }).catch(() => {});
+    },
+  });
+
+  return new NextResponse(webStream, {
+    status: 200,
+    headers: {
+      'Content-Type': 'video/mp4',
+      'Content-Disposition': `attachment; filename="${fileName}"`,
+      'Content-Length': String(stat.size),
+      'Access-Control-Expose-Headers': 'Content-Disposition',
+    },
+  });
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const { searchParams } = new URL(request.url);
   const targetUrl = searchParams.get('url');
@@ -89,21 +129,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         // Process HLS manifest stream into playable MP4
         await remuxHlsToMp4(trimmedStreamUrl, outputFilePath);
 
-        const mp4Buffer = await fs.promises.readFile(outputFilePath);
-
-        // Asynchronous temp file cleanup
-        await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-        tempDir = null;
-
-        return new NextResponse(mp4Buffer, {
-          status: 200,
-          headers: {
-            'Content-Type': 'video/mp4',
-            'Content-Disposition': `attachment; filename="${fileName}"`,
-            'Content-Length': String(mp4Buffer.byteLength),
-            'Access-Control-Expose-Headers': 'Content-Disposition',
-          },
-        });
+        const currentTempDir = tempDir;
+        tempDir = null; // Ownership transferred to stream cleanup
+        return streamFileResponse(outputFilePath, currentTempDir, fileName);
       }
     } else {
       // Generated Download Variants (360p, 480p, 1080p)
@@ -123,20 +151,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         targetHeight: targetDims.height,
       });
 
-      const generatedBuffer = await fs.promises.readFile(outputFilePath);
-
-      // Asynchronous temp file cleanup
-      await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-      tempDir = null;
-
-      return new NextResponse(generatedBuffer, {
-        status: 200,
-        headers: {
-          'Content-Type': 'video/mp4',
-          'Content-Disposition': `attachment; filename="${fileName}"`,
-          'Content-Length': String(generatedBuffer.byteLength),
-        },
-      });
+      const currentTempDir = tempDir;
+      tempDir = null; // Ownership transferred to stream cleanup
+      return streamFileResponse(outputFilePath, currentTempDir, fileName);
     }
   } catch (error: unknown) {
     console.error('[Download API Error]:', error);
