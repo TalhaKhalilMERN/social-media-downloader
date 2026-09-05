@@ -9,7 +9,7 @@ import { generateVideoVariant, remuxHlsToMp4 } from '@/lib/ffmpeg';
 import { getYtDlpPath } from '@/lib/binaries';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { ProxyAgent } from 'undici';
+import { fetch as undiciFetch, ProxyAgent } from 'undici';
 
 const execFileAsync = promisify(execFile);
 
@@ -116,13 +116,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       if (!isHlsStream) {
         const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
         // Native Direct MP4 Download (e.g. DramaBox direct .mp4 URL)
-        const response = await fetch(trimmedStreamUrl, {
-          ...(proxyUrl ? { dispatcher: new ProxyAgent(proxyUrl) } : {}),
+        const response = await undiciFetch(trimmedStreamUrl, {
+          dispatcher: proxyUrl ? new ProxyAgent(proxyUrl) : undefined,
           headers: {
             'User-Agent':
               'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           },
-        } as RequestInit);
+        });
         if (!response.ok || !response.body) {
           throw new Error('Failed to fetch native media stream.');
         }
