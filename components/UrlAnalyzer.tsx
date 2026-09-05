@@ -92,13 +92,19 @@ export default function UrlAnalyzer() {
     const downloadApiUrl = `/api/download?url=${encodeURIComponent(url.trim())}&quality=${encodeURIComponent(fmt.quality)}&source=${encodeURIComponent(fmt.source)}`;
     const currentPlatform = result?.platform || result?.video?.platform;
 
+    const videoTitle = result?.video?.title;
+    const sanitizedTitle = videoTitle
+      ? videoTitle.replace(/[\\/:\*\?"<>\|]/g, '').replace(/\s+/g, ' ').trim()
+      : currentPlatform || 'video';
+    const fallbackFileName = `${sanitizedTitle} - ${fmt.quality}.mp4`;
+
     // PATH A: Native Direct MP4 (e.g. DramaBox direct .mp4 URL)
     if (currentPlatform === 'dramabox' && fmt.source === 'native') {
       try {
         const link = document.createElement('a');
         link.style.display = 'none';
         link.href = downloadApiUrl;
-        link.download = `${currentPlatform}-${fmt.quality}.mp4`;
+        link.download = fallbackFileName;
         document.body.appendChild(link);
         link.click();
 
@@ -137,12 +143,21 @@ export default function UrlAnalyzer() {
         return;
       }
 
-      let fileName = `${currentPlatform || 'video'}-${fmt.quality}.mp4`;
+      let fileName = fallbackFileName;
       const disposition = response.headers.get('Content-Disposition');
-      if (disposition && disposition.includes('filename=')) {
-        const match = disposition.match(/filename="?([^";]+)"?/);
-        if (match && match[1]) {
-          fileName = match[1];
+      if (disposition) {
+        const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+        if (utf8Match && utf8Match[1]) {
+          try {
+            fileName = decodeURIComponent(utf8Match[1]);
+          } catch {
+            fileName = utf8Match[1];
+          }
+        } else {
+          const match = disposition.match(/filename="?([^";]+)"?/i);
+          if (match && match[1]) {
+            fileName = match[1];
+          }
         }
       }
 

@@ -22,6 +22,10 @@ function streamFileResponse(filePath: string, dirToCleanup: string, fileName: st
   const stat = fs.statSync(filePath);
   const fileStream = fs.createReadStream(filePath);
 
+  const safeHeaderFileName = fileName.replace(/"/g, '');
+  const encodedFileName = encodeURIComponent(fileName);
+  const contentDispositionHeader = `attachment; filename="${safeHeaderFileName}"; filename*=UTF-8''${encodedFileName}`;
+
   const webStream = new ReadableStream({
     start(controller) {
       fileStream.on('data', (chunk) => {
@@ -46,7 +50,7 @@ function streamFileResponse(filePath: string, dirToCleanup: string, fileName: st
     status: 200,
     headers: {
       'Content-Type': 'video/mp4',
-      'Content-Disposition': `attachment; filename="${fileName}"`,
+      'Content-Disposition': contentDispositionHeader,
       'Content-Length': String(stat.size),
       'Access-Control-Expose-Headers': 'Content-Disposition',
     },
@@ -78,13 +82,19 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   const platform = validation.platform || 'video';
-  const fileName = `${platform}-${quality}.mp4`;
-
   let tempDir: string | null = null;
 
   try {
     // Step 2: Analyze metadata
     const { video } = await analyzeVideoUrl(validation.normalizedUrl);
+
+    // Format file name preserving actual video title
+    const rawTitle = video.title || platform;
+    const sanitizedTitle = rawTitle
+      .replace(/[\\/:\*\?"<>\|]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const fileName = `${sanitizedTitle} - ${quality}.mp4`;
 
     // Step 3: Get direct media stream URL using yt-dlp -g
     const ytDlpPath = getYtDlpPath();
@@ -127,11 +137,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           throw new Error('Failed to fetch native media stream.');
         }
 
+        const safeHeaderFileName = fileName.replace(/"/g, '');
+        const encodedFileName = encodeURIComponent(fileName);
+        const contentDispositionHeader = `attachment; filename="${safeHeaderFileName}"; filename*=UTF-8''${encodedFileName}`;
+
         return new NextResponse(response.body as unknown as ReadableStream, {
           status: 200,
           headers: {
             'Content-Type': 'video/mp4',
-            'Content-Disposition': `attachment; filename="${fileName}"`,
+            'Content-Disposition': contentDispositionHeader,
             'Access-Control-Expose-Headers': 'Content-Disposition',
           },
         });
