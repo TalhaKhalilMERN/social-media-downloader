@@ -11,15 +11,24 @@ export interface MediaInspectionResult {
   duration: number | null;
 }
 
+
+function getProxyUrl(): string | undefined {
+  return process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+}
+
 /**
  * Inspects a media file or stream URL using ffprobe to obtain actual dimensions and codec metadata.
  */
 export async function inspectMediaUrl(mediaUrl: string): Promise<MediaInspectionResult> {
   const ffprobePath = getFfprobePath();
 
+  const proxyUrl = getProxyUrl();
+  const useProxy = /^https?:\/\//i.test(mediaUrl);
+
   const args = [
     '-v',
     'error',
+    ...(proxyUrl && useProxy ? ['-http_proxy', proxyUrl] : []),
     '-select_streams',
     'v:0',
     '-show_entries',
@@ -45,8 +54,8 @@ export async function inspectMediaUrl(mediaUrl: string): Promise<MediaInspection
       typeof stream?.duration === 'string'
         ? parseFloat(stream.duration)
         : typeof stream?.duration === 'number'
-        ? stream.duration
-        : null;
+          ? stream.duration
+          : null;
 
     if (width > 0 && height > 0) {
       return { width, height, codec, duration };

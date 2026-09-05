@@ -9,6 +9,7 @@ import { generateVideoVariant, remuxHlsToMp4 } from '@/lib/ffmpeg';
 import { getYtDlpPath } from '@/lib/binaries';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { ProxyAgent } from 'undici';
 
 const execFileAsync = promisify(execFile);
 
@@ -28,16 +29,16 @@ function streamFileResponse(filePath: string, dirToCleanup: string, fileName: st
       });
       fileStream.on('end', () => {
         controller.close();
-        fs.promises.rm(dirToCleanup, { recursive: true, force: true }).catch(() => {});
+        fs.promises.rm(dirToCleanup, { recursive: true, force: true }).catch(() => { });
       });
       fileStream.on('error', (err) => {
         controller.error(err);
-        fs.promises.rm(dirToCleanup, { recursive: true, force: true }).catch(() => {});
+        fs.promises.rm(dirToCleanup, { recursive: true, force: true }).catch(() => { });
       });
     },
     cancel() {
       fileStream.destroy();
-      fs.promises.rm(dirToCleanup, { recursive: true, force: true }).catch(() => {});
+      fs.promises.rm(dirToCleanup, { recursive: true, force: true }).catch(() => { });
     },
   });
 
@@ -87,9 +88,20 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     // Step 3: Get direct media stream URL using yt-dlp -g
     const ytDlpPath = getYtDlpPath();
+    const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+
+    const ytDlpArgs = [
+      '-g',
+      '-f',
+      'b/best',
+      '--no-warnings',
+      ...(proxyUrl ? ['--proxy', proxyUrl] : []),
+      validation.normalizedUrl,
+    ];
+
     const { stdout: directStreamUrl } = await execFileAsync(
       ytDlpPath,
-      ['-g', '-f', 'b/best', '--no-warnings', validation.normalizedUrl],
+      ytDlpArgs,
       { timeout: 30000 }
     );
 
@@ -102,13 +114,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     if (source === 'native') {
       if (!isHlsStream) {
+        const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
         // Native Direct MP4 Download (e.g. DramaBox direct .mp4 URL)
         const response = await fetch(trimmedStreamUrl, {
+          ...(proxyUrl ? { dispatcher: new ProxyAgent(proxyUrl) } : {}),
           headers: {
             'User-Agent':
               'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           },
-        });
+        } as RequestInit);
         if (!response.ok || !response.body) {
           throw new Error('Failed to fetch native media stream.');
         }
@@ -160,7 +174,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     // Cleanup temp files if error occurred
     if (tempDir) {
-      await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => { });
     }
 
     return NextResponse.json(

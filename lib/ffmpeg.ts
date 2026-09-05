@@ -12,6 +12,10 @@ export interface GenerateVariantOptions {
   targetHeight: number;
 }
 
+function getProxyUrl(): string | undefined {
+  return process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+}
+
 /**
  * Remuxes or converts an HLS (.m3u8) stream URL into a playable MP4 file.
  * Prefers fast stream copying (-c copy) for speed and quality preservation.
@@ -21,8 +25,12 @@ export async function remuxHlsToMp4(inputUrl: string, outputPath: string): Promi
   const ffmpegPath = getFfmpegPath();
 
   // Attempt 1: Fast stream copy without re-encoding
+  const proxyUrl = getProxyUrl();
+
+  // Attempt 1: Fast stream copy without re-encoding
   const copyArgs = [
     '-y',
+    ...(proxyUrl ? ['-http_proxy', proxyUrl] : []),
     '-i',
     inputUrl,
     '-c',
@@ -45,6 +53,7 @@ export async function remuxHlsToMp4(inputUrl: string, outputPath: string): Promi
   // Attempt 2: Fallback re-encode to H.264 / AAC
   const transcodeArgs = [
     '-y',
+    ...(proxyUrl ? ['-http_proxy', proxyUrl] : []),
     '-i',
     inputUrl,
     '-c:v',
@@ -79,8 +88,11 @@ export async function generateVideoVariant(options: GenerateVariantOptions): Pro
   const { inputPath, outputPath, targetWidth, targetHeight } = options;
   const ffmpegPath = getFfmpegPath();
 
+  const proxyUrl = getProxyUrl();
+
   const args = [
     '-y',
+    ...(proxyUrl && /^https?:\/\//i.test(inputPath) ? ['-http_proxy', proxyUrl] : []),
     '-i',
     inputPath,
     '-vf',

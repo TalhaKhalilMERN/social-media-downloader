@@ -8,6 +8,10 @@ import { getVideoQuality, calculateVariantDimensions } from './quality';
 
 const execFileAsync = promisify(execFile);
 
+function getProxyUrl(): string | undefined {
+  return process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+}
+
 interface RawYtDlpFormat {
   format_id?: string;
   width?: number;
@@ -74,11 +78,14 @@ export async function analyzeVideoUrl(targetUrl: string): Promise<{
   const platform = validation.platform;
   const ytDlpPath = getYtDlpPath();
 
+  const proxyUrl = getProxyUrl();
+
   const args = [
     '-J',
     '--no-warnings',
     '--no-playlist',
     '--no-call-home',
+    ...(proxyUrl ? ['--proxy', proxyUrl] : []),
     targetUrl,
   ];
 
@@ -148,8 +155,8 @@ export async function analyzeVideoUrl(targetUrl: string): Promise<{
         typeof f.filesize === 'number' && f.filesize > 0
           ? f.filesize
           : typeof f.filesize_approx === 'number' && f.filesize_approx > 0
-          ? f.filesize_approx
-          : null;
+            ? f.filesize_approx
+            : null;
 
       formats.push({
         id: String(f.format_id || `native-${quality}`),
@@ -189,8 +196,8 @@ export async function analyzeVideoUrl(targetUrl: string): Promise<{
       typeof rawJson.filesize === 'number' && rawJson.filesize > 0
         ? rawJson.filesize
         : typeof rawJson.filesize_approx === 'number' && rawJson.filesize_approx > 0
-        ? rawJson.filesize_approx
-        : null;
+          ? rawJson.filesize_approx
+          : null;
 
     if (sourceQuality === '720p') {
       const dim360 = calculateVariantDimensions(topWidth, topHeight, '360p');
