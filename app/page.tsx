@@ -37,7 +37,7 @@ export default function Home() {
 
       {/* Clean Footer */}
       <footer className="w-full max-w-4xl text-center py-6 text-xs text-slate-500 border-t border-slate-900">
-        <p>ReelShort & DramaBox Downloader &bull; Built with Next.js</p>
+        <p>ReelShort & DramaBox Downloader</p>
       </footer>
     </main>
   );

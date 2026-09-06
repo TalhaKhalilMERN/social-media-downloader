@@ -45,7 +45,14 @@ export function createFfmpegMediaStream(options: FfmpegStreamOptions): ReadableS
 
   let processingArgs: string[];
   if (mode === 'remux') {
-    processingArgs = ['-c', 'copy'];
+    processingArgs = [
+      '-c',
+      'copy',
+      '-bsf:a',
+      'aac_adtstoasc',
+      '-avoid_negative_ts',
+      'make_zero',
+    ];
   } else {
     const w = targetWidth || 720;
     const h = targetHeight || 1280;
@@ -60,6 +67,8 @@ export function createFfmpegMediaStream(options: FfmpegStreamOptions): ReadableS
       '23',
       '-c:a',
       'aac',
+      '-avoid_negative_ts',
+      'make_zero',
     ];
   }
 

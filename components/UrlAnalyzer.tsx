@@ -83,7 +83,7 @@ export default function UrlAnalyzer() {
     }
   };
 
-  const handleDownloadClick = async (fmt: NormalizedFormat) => {
+  const handleDownloadClick = (fmt: NormalizedFormat) => {
     if (!url.trim() || downloadingFormatId) return;
 
     setDownloadingFormatId(fmt.id);
@@ -98,88 +98,26 @@ export default function UrlAnalyzer() {
       : currentPlatform || 'video';
     const fallbackFileName = `${sanitizedTitle} - ${fmt.quality}.mp4`;
 
-    // PATH A: Native Direct MP4 (e.g. DramaBox direct .mp4 URL)
-    if (currentPlatform === 'dramabox' && fmt.source === 'native') {
-      try {
-        const link = document.createElement('a');
-        link.style.display = 'none';
-        link.href = downloadApiUrl;
-        link.download = fallbackFileName;
-        document.body.appendChild(link);
-        link.click();
-
-        setTimeout(() => {
-          if (document.body.contains(link)) {
-            document.body.removeChild(link);
-          }
-          setDownloadingFormatId(null);
-        }, 6000);
-      } catch (err) {
-        console.error('Direct download trigger error:', err);
-        setDownloadError({
-          formatId: fmt.id,
-          message: 'Unable to initiate download. Please try again.',
-        });
-        setDownloadingFormatId(null);
-      }
-      return;
-    }
-
-    // PATH B & PATH C: ReelShort HLS Remux or Generated Variants
     try {
-      const response = await fetch(downloadApiUrl);
-
-      if (!response.ok) {
-        let errorMsg = 'Unable to process download. Please try again.';
-        try {
-          const errorJson = await response.json();
-          if (errorJson?.error) {
-            errorMsg = errorJson.error;
-          }
-        } catch {
-          // Fallback if response is not JSON
-        }
-        setDownloadError({ formatId: fmt.id, message: errorMsg });
-        return;
-      }
-
-      let fileName = fallbackFileName;
-      const disposition = response.headers.get('Content-Disposition');
-      if (disposition) {
-        const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-        if (utf8Match && utf8Match[1]) {
-          try {
-            fileName = decodeURIComponent(utf8Match[1]);
-          } catch {
-            fileName = utf8Match[1];
-          }
-        } else {
-          const match = disposition.match(/filename="?([^";]+)"?/i);
-          if (match && match[1]) {
-            fileName = match[1];
-          }
-        }
-      }
-
-      const blob = await response.blob();
-      const blobUrl = window.URL.createObjectURL(blob);
-
       const link = document.createElement('a');
       link.style.display = 'none';
-      link.href = blobUrl;
-      link.download = fileName;
+      link.href = downloadApiUrl;
+      link.download = fallbackFileName;
       document.body.appendChild(link);
       link.click();
 
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(blobUrl);
+      setTimeout(() => {
+        if (document.body.contains(link)) {
+          document.body.removeChild(link);
+        }
+        setDownloadingFormatId(null);
+      }, 5000);
     } catch (err: unknown) {
-      console.error('Download preparation error:', err);
+      console.error('Download trigger error:', err);
       setDownloadError({
         formatId: fmt.id,
-        message: 'Network error occurred while preparing download. Please try again.',
+        message: 'Unable to initiate download. Please try again.',
       });
-    } finally {
       setDownloadingFormatId(null);
     }
   };
