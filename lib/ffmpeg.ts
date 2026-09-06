@@ -1,4 +1,4 @@
-import { execFile } from 'child_process';
+import { execFile, spawn, ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import { getFfmpegPath } from './binaries';
 import { inspectMediaUrl } from './media-inspector';
@@ -12,8 +12,145 @@ export interface GenerateVariantOptions {
   targetHeight: number;
 }
 
+export interface FfmpegStreamOptions {
+  inputUrl: string;
+  mode: 'remux' | 'transcode';
+  targetWidth?: number;
+  targetHeight?: number;
+}
+
 function getProxyUrl(): string | undefined {
   return process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+}
+
+/**
+ * Creates a Web ReadableStream backed by an on-the-fly FFmpeg child process outputting
+ * a fragmented MP4 (fMP4) stream to stdout (pipe:1).
+ * Supports both HLS remuxing (-c copy) and video resolution transcoding (-vf scale=w:h).
+ * Handles backpressure, stderr buffering, error handling, and process termination on disconnect.
+ */
+export function createFfmpegMediaStream(options: FfmpegStreamOptions): ReadableStream<Uint8Array> {
+  const { inputUrl, mode, targetWidth, targetHeight } = options;
+  const ffmpegPath = getFfmpegPath();
+  const proxyUrl = getProxyUrl();
+
+  const isHttpInput = /^https?:\/\//i.test(inputUrl);
+
+  const baseArgs = [
+    '-y',
+    ...(proxyUrl && isHttpInput ? ['-http_proxy', proxyUrl] : []),
+    '-i',
+    inputUrl,
+  ];
+
+  let processingArgs: string[];
+  if (mode === 'remux') {
+    processingArgs = ['-c', 'copy'];
+  } else {
+    const w = targetWidth || 720;
+    const h = targetHeight || 1280;
+    processingArgs = [
+      '-vf',
+      `scale=${w}:${h}`,
+      '-c:v',
+      'libx264',
+      '-preset',
+      'fast',
+      '-crf',
+      '23',
+      '-c:a',
+      'aac',
+    ];
+  }
+
+  const formatArgs = [
+    '-f',
+    'mp4',
+    '-movflags',
+    '+frag_keyframe+empty_moov+default_base_moof',
+    'pipe:1',
+  ];
+
+  const args = [...baseArgs, ...processingArgs, ...formatArgs];
+
+  let ffmpegProc: ChildProcess | null = null;
+  let isCleanedUp = false;
+  let stderrBuffer = '';
+
+  const cleanup = () => {
+    if (isCleanedUp) return;
+    isCleanedUp = true;
+
+    if (ffmpegProc && !ffmpegProc.killed) {
+      try {
+        ffmpegProc.kill('SIGTERM');
+        const procRef = ffmpegProc;
+        setTimeout(() => {
+          if (procRef && !procRef.killed) {
+            procRef.kill('SIGKILL');
+          }
+        }, 2000);
+      } catch {
+        // Ignore kill errors
+      }
+    }
+  };
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      try {
+        ffmpegProc = spawn(ffmpegPath, args, {
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        ffmpegProc.stdout?.on('data', (chunk: Buffer) => {
+          if (isCleanedUp) return;
+          controller.enqueue(new Uint8Array(chunk));
+        });
+
+        ffmpegProc.stdout?.on('end', () => {
+          if (isCleanedUp) return;
+          controller.close();
+          cleanup();
+        });
+
+        ffmpegProc.stderr?.on('data', (chunk: Buffer) => {
+          stderrBuffer += chunk.toString();
+          if (stderrBuffer.length > 8000) {
+            stderrBuffer = stderrBuffer.slice(-8000);
+          }
+        });
+
+        ffmpegProc.on('error', (err: Error) => {
+          console.error('[FFmpeg Stream Process Error]:', err.message);
+          if (!isCleanedUp) {
+            controller.error(err);
+            cleanup();
+          }
+        });
+
+        ffmpegProc.on('close', (code: number | null) => {
+          if (isCleanedUp) return;
+          if (code !== 0 && code !== null) {
+            const sanitizedStderr = stderrBuffer
+              .replace(/:\/\/[^:@]+:[^@]+@/g, '://***:***@')
+              .slice(-300);
+            console.error(`[FFmpeg Exit Error] Code ${code}: ${sanitizedStderr}`);
+            controller.error(new Error(`FFmpeg streaming processing failed with exit code ${code}`));
+          } else {
+            controller.close();
+          }
+          cleanup();
+        });
+      } catch (err: unknown) {
+        controller.error(err as Error);
+        cleanup();
+      }
+    },
+    cancel() {
+      cleanup();
+    },
+  });
 }
 
 /**

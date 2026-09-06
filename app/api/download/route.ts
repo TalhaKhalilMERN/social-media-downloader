@@ -1,61 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
 import { validateSupportedUrl } from '@/lib/url-validator';
 import { analyzeVideoUrl } from '@/lib/yt-dlp';
 import { calculateVariantDimensions, TargetQuality } from '@/lib/quality';
-import { generateVideoVariant, remuxHlsToMp4 } from '@/lib/ffmpeg';
+import { createFfmpegMediaStream } from '@/lib/ffmpeg';
 import { getYtDlpPath } from '@/lib/binaries';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { fetch as undiciFetch, ProxyAgent } from 'undici';
 
 const execFileAsync = promisify(execFile);
-
-/**
- * Streams a local media file from disk to the client via Web ReadableStream
- * without buffering the full file into Node RAM memory.
- * Automatically cleans up the temporary working directory upon stream end, error, or cancellation.
- */
-function streamFileResponse(filePath: string, dirToCleanup: string, fileName: string): NextResponse {
-  const stat = fs.statSync(filePath);
-  const fileStream = fs.createReadStream(filePath);
-
-  const safeHeaderFileName = fileName.replace(/"/g, '');
-  const encodedFileName = encodeURIComponent(fileName);
-  const contentDispositionHeader = `attachment; filename="${safeHeaderFileName}"; filename*=UTF-8''${encodedFileName}`;
-
-  const webStream = new ReadableStream({
-    start(controller) {
-      fileStream.on('data', (chunk) => {
-        controller.enqueue(chunk);
-      });
-      fileStream.on('end', () => {
-        controller.close();
-        fs.promises.rm(dirToCleanup, { recursive: true, force: true }).catch(() => { });
-      });
-      fileStream.on('error', (err) => {
-        controller.error(err);
-        fs.promises.rm(dirToCleanup, { recursive: true, force: true }).catch(() => { });
-      });
-    },
-    cancel() {
-      fileStream.destroy();
-      fs.promises.rm(dirToCleanup, { recursive: true, force: true }).catch(() => { });
-    },
-  });
-
-  return new NextResponse(webStream, {
-    status: 200,
-    headers: {
-      'Content-Type': 'video/mp4',
-      'Content-Disposition': contentDispositionHeader,
-      'Content-Length': String(stat.size),
-      'Access-Control-Expose-Headers': 'Content-Disposition',
-    },
-  });
-}
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const { searchParams } = new URL(request.url);
@@ -82,7 +35,6 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   const platform = validation.platform || 'video';
-  let tempDir: string | null = null;
 
   try {
     // Step 2: Analyze metadata
@@ -95,6 +47,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       .replace(/\s+/g, ' ')
       .trim();
     const fileName = `${sanitizedTitle} - ${quality}.mp4`;
+
+    const safeHeaderFileName = fileName.replace(/"/g, '');
+    const encodedFileName = encodeURIComponent(fileName);
+    const contentDispositionHeader = `attachment; filename="${safeHeaderFileName}"; filename*=UTF-8''${encodedFileName}`;
 
     // Step 3: Get direct media stream URL using yt-dlp -g
     const ytDlpPath = getYtDlpPath();
@@ -122,10 +78,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     const isHlsStream = trimmedStreamUrl.includes('.m3u8') || trimmedStreamUrl.includes('m3u8');
 
+    // Case 1 & Case 2: Native requests vs Generated quality variants
     if (source === 'native') {
       if (!isHlsStream) {
-        const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
-        // Native Direct MP4 Download (e.g. DramaBox direct .mp4 URL)
+        // Case 1: Native Direct MP4 Streaming (e.g. DramaBox direct .mp4 URL)
         const response = await undiciFetch(trimmedStreamUrl, {
           dispatcher: proxyUrl ? new ProxyAgent(proxyUrl) : undefined,
           headers: {
@@ -137,10 +93,6 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           throw new Error('Failed to fetch native media stream.');
         }
 
-        const safeHeaderFileName = fileName.replace(/"/g, '');
-        const encodedFileName = encodeURIComponent(fileName);
-        const contentDispositionHeader = `attachment; filename="${safeHeaderFileName}"; filename*=UTF-8''${encodedFileName}`;
-
         return new NextResponse(response.body as unknown as ReadableStream, {
           status: 200,
           headers: {
@@ -150,46 +102,45 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           },
         });
       } else {
-        // Native HLS Stream Download (e.g. ReelShort .m3u8 URL)
-        tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'downloader-'));
-        const outputFilePath = path.join(tempDir, fileName);
+        // Case 3: Native HLS Stream Remuxing (e.g. ReelShort .m3u8 URL) -> On-the-fly fMP4 stdout stream
+        const mediaStream = createFfmpegMediaStream({
+          inputUrl: trimmedStreamUrl,
+          mode: 'remux',
+        });
 
-        // Process HLS manifest stream into playable MP4
-        await remuxHlsToMp4(trimmedStreamUrl, outputFilePath);
-
-        const currentTempDir = tempDir;
-        tempDir = null; // Ownership transferred to stream cleanup
-        return streamFileResponse(outputFilePath, currentTempDir, fileName);
+        return new NextResponse(mediaStream, {
+          status: 200,
+          headers: {
+            'Content-Type': 'video/mp4',
+            'Content-Disposition': contentDispositionHeader,
+            'Access-Control-Expose-Headers': 'Content-Disposition',
+          },
+        });
       }
     } else {
-      // Generated Download Variants (360p, 480p, 1080p)
-      tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'downloader-'));
-      const outputFilePath = path.join(tempDir, `output_${quality}.mp4`);
-
-      // Determine variant dimensions
+      // Case 2 & Case 4: Generated Download Variants (360p, 480p, 1080p) -> On-the-fly FFmpeg transcode fMP4 stream
       const sourceW = video.width || 720;
       const sourceH = video.height || 1280;
       const targetDims = calculateVariantDimensions(sourceW, sourceH, quality);
 
-      // Transcode variant directly from stream URL via FFmpeg
-      await generateVideoVariant({
-        inputPath: trimmedStreamUrl,
-        outputPath: outputFilePath,
+      const mediaStream = createFfmpegMediaStream({
+        inputUrl: trimmedStreamUrl,
+        mode: 'transcode',
         targetWidth: targetDims.width,
         targetHeight: targetDims.height,
       });
 
-      const currentTempDir = tempDir;
-      tempDir = null; // Ownership transferred to stream cleanup
-      return streamFileResponse(outputFilePath, currentTempDir, fileName);
+      return new NextResponse(mediaStream, {
+        status: 200,
+        headers: {
+          'Content-Type': 'video/mp4',
+          'Content-Disposition': contentDispositionHeader,
+          'Access-Control-Expose-Headers': 'Content-Disposition',
+        },
+      });
     }
   } catch (error: unknown) {
     console.error('[Download API Error]:', error);
-
-    // Cleanup temp files if error occurred
-    if (tempDir) {
-      await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => { });
-    }
 
     return NextResponse.json(
       {
