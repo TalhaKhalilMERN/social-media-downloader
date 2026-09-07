@@ -13,8 +13,9 @@ const execFileAsync = promisify(execFile);
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const { searchParams } = new URL(request.url);
   const targetUrl = searchParams.get('url');
-  const quality = (searchParams.get('quality') || '720p') as TargetQuality;
+  const quality = (searchParams.get('quality') || '720p') as string;
   const source = searchParams.get('source') || 'native';
+  const formatId = searchParams.get('formatId') || searchParams.get('format_id') || undefined;
 
   // Step 1: Security - Server-side Domain Validation
   const validation = validateSupportedUrl(targetUrl || '');
@@ -26,12 +27,22 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
 
   // Security - Validate requested quality parameter
-  const allowedQualities: TargetQuality[] = ['360p', '480p', '720p', '1080p'];
-  if (!allowedQualities.includes(quality)) {
-    return NextResponse.json(
-      { success: false, error: 'Invalid video quality requested.' },
-      { status: 400 }
-    );
+  if (source === 'generated') {
+    const allowedQualities: TargetQuality[] = ['360p', '480p', '720p', '1080p'];
+    if (!allowedQualities.includes(quality as TargetQuality)) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid video quality requested.' },
+        { status: 400 }
+      );
+    }
+  } else {
+    // For native downloads, allow any resolution string (e.g. 540p, 720p, 1080p, 900p)
+    if (!/^\d{3,4}p$/i.test(quality) && quality !== 'Unknown') {
+      return NextResponse.json(
+        { success: false, error: 'Invalid native video quality parameter.' },
+        { status: 400 }
+      );
+    }
   }
 
   const platform = validation.platform || 'video';
@@ -56,10 +67,22 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const ytDlpPath = getYtDlpPath();
     const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
 
+    // Determine format selector: prefer exact native formatId if provided and safe
+    let ytDlpFormatSelector = 'b/best';
+    if (
+      source === 'native' &&
+      formatId &&
+      /^[a-zA-Z0-9_\-]+$/.test(formatId) &&
+      !formatId.startsWith('native-') &&
+      !formatId.startsWith('gen-')
+    ) {
+      ytDlpFormatSelector = formatId;
+    }
+
     const ytDlpArgs = [
       '-g',
       '-f',
-      'b/best',
+      ytDlpFormatSelector,
       '--no-warnings',
       ...(proxyUrl ? ['--proxy', proxyUrl] : []),
       validation.normalizedUrl,
@@ -121,7 +144,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       // Case 2 & Case 4: Generated Download Variants (360p, 480p, 1080p) -> On-the-fly FFmpeg transcode fMP4 stream
       const sourceW = video.width || 720;
       const sourceH = video.height || 1280;
-      const targetDims = calculateVariantDimensions(sourceW, sourceH, quality);
+      const targetDims = calculateVariantDimensions(sourceW, sourceH, quality as TargetQuality);
 
       const mediaStream = createFfmpegMediaStream({
         inputUrl: trimmedStreamUrl,

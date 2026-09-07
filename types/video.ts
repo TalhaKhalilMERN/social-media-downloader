@@ -16,6 +16,7 @@ export interface NormalizedFormat {
   filesizeDisplay: string;
   source: FormatSource;
   generatedFrom?: string;
+  formatId?: string;
 }
 
 export interface NormalizedVideoMetadata {

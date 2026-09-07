@@ -158,6 +158,8 @@ export async function analyzeVideoUrl(targetUrl: string): Promise<{
             ? f.filesize_approx
             : null;
 
+      const rawFormatId = f.format_id ? String(f.format_id) : undefined;
+
       formats.push({
         id: String(f.format_id || `native-${quality}`),
         quality,
@@ -167,6 +169,7 @@ export async function analyzeVideoUrl(targetUrl: string): Promise<{
         filesize,
         filesizeDisplay: formatFileSizeDisplay(filesize, false),
         source: 'native',
+        formatId: rawFormatId,
       });
     }
   } else {
@@ -198,6 +201,8 @@ export async function analyzeVideoUrl(targetUrl: string): Promise<{
         : typeof rawJson.filesize_approx === 'number' && rawJson.filesize_approx > 0
           ? rawJson.filesize_approx
           : null;
+
+    const rawFormatId = rawJson.format_id ? String(rawJson.format_id) : undefined;
 
     if (sourceQuality === '720p') {
       const dim360 = calculateVariantDimensions(topWidth, topHeight, '360p');
@@ -237,6 +242,7 @@ export async function analyzeVideoUrl(targetUrl: string): Promise<{
         filesize: nativeFilesize,
         filesizeDisplay: formatFileSizeDisplay(nativeFilesize, false),
         source: 'native',
+        formatId: rawFormatId,
       });
 
       formats.push({
@@ -261,6 +267,7 @@ export async function analyzeVideoUrl(targetUrl: string): Promise<{
         filesize: nativeFilesize,
         filesizeDisplay: formatFileSizeDisplay(nativeFilesize, false),
         source: 'native',
+        formatId: rawFormatId,
       });
     }
   }

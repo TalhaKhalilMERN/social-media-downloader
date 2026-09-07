@@ -89,7 +89,8 @@ export default function UrlAnalyzer() {
     setDownloadingFormatId(fmt.id);
     setDownloadError(null);
 
-    const downloadApiUrl = `/api/download?url=${encodeURIComponent(url.trim())}&quality=${encodeURIComponent(fmt.quality)}&source=${encodeURIComponent(fmt.source)}`;
+    const formatIdParam = fmt.formatId || (fmt.id && !fmt.id.startsWith('gen-') && !fmt.id.startsWith('native-') ? fmt.id : '');
+    const downloadApiUrl = `/api/download?url=${encodeURIComponent(url.trim())}&quality=${encodeURIComponent(fmt.quality)}&source=${encodeURIComponent(fmt.source)}${formatIdParam ? `&formatId=${encodeURIComponent(formatIdParam)}` : ''}`;
     const currentPlatform = result?.platform || result?.video?.platform;
 
     const videoTitle = result?.video?.title;
