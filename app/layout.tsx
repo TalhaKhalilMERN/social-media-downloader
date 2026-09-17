@@ -8,6 +8,11 @@ export const metadata: Metadata = {
   title: 'ReelShort & DramaBox Downloader — Save Episode Videos',
   description:
     'Download ReelShort and DramaBox episode videos in high quality. Paste a URL, pick your resolution, and save the video instantly.',
+  icons: {
+    icon: '/logo.svg',
+    shortcut: '/logo.svg',
+    apple: '/logo.svg',
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

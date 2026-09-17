@@ -1,3 +1,4 @@
+import Image from 'next/image';
 import UrlAnalyzer from '@/components/UrlAnalyzer';
 import Navbar from '@/components/Navbar';
 import FaqSection from '@/components/FaqSection';
@@ -467,13 +468,14 @@ export default function Home() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8 mb-10">
             {/* Brand */}
             <div className="col-span-2 md:col-span-1">
-              <div className="flex items-center gap-2 mb-3">
-                <span
-                  className="w-7 h-7 rounded-lg flex items-center justify-center text-white"
-                  style={{ background: 'var(--accent)' }}
-                >
-                  <Download className="w-3.5 h-3.5" />
-                </span>
+              <div className="flex items-center gap-2.5 mb-3">
+                <Image
+                  src="/logo.svg"
+                  alt="VidSave Logo"
+                  width={32}
+                  height={32}
+                  className="w-8 h-8 rounded-lg shrink-0 object-contain"
+                />
                 <span className="font-bold text-sm" style={{ color: 'var(--text-primary)' }}>
                   VidSave
                 </span>

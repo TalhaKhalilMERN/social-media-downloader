@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Image from 'next/image';
 import { Sun, Moon, Download } from 'lucide-react';
 
 function readDark(): boolean {
@@ -40,15 +41,16 @@ export default function Navbar() {
         {/* Brand */}
         <button
           onClick={scrollToDownloader}
-          className="flex items-center gap-2 font-bold text-sm tracking-tight hover:opacity-80 transition-opacity"
+          className="flex items-center gap-2.5 font-bold text-sm tracking-tight hover:opacity-80 transition-opacity"
           style={{ color: 'var(--text-primary)' }}
         >
-          <span
-            className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
-            style={{ background: 'var(--accent)', color: '#fff' }}
-          >
-            <Download className="w-3.5 h-3.5" />
-          </span>
+          <Image
+            src="/logo.svg"
+            alt="VidSave Logo"
+            width={32}
+            height={32}
+            className="w-8 h-8 rounded-lg shrink-0 object-contain"
+          />
           <span className="hidden sm:inline">VidSave</span>
         </button>
 
