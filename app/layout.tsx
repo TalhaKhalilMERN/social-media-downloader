@@ -1,24 +1,27 @@
-import type { Metadata } from "next";
-import { Inter } from "next/font/google";
-import "./globals.css";
+import type { Metadata } from 'next';
+import { Inter } from 'next/font/google';
+import './globals.css';
 
-const inter = Inter({ subsets: ["latin"] });
+const inter = Inter({ subsets: ['latin'], variable: '--font-inter' });
 
 export const metadata: Metadata = {
-  title: "Video Downloader - Analyze & Inspect Video Streams",
-  description: "Paste a supported video URL to analyze available resolutions, stream formats, and video metadata using server-side analysis.",
+  title: 'ReelShort & DramaBox Downloader — Save Episode Videos',
+  description:
+    'Download ReelShort and DramaBox episode videos in high quality. Paste a URL, pick your resolution, and save the video instantly.',
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className="dark font-sans">
-      <body className={`${inter.className} bg-slate-950 text-slate-100 min-h-screen antialiased`}>
-        {children}
-      </body>
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* Inline script runs before first paint to set the correct theme class — prevents FOUC */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem('theme');if(t==='light'){document.documentElement.classList.remove('dark');}else if(t==='dark'){document.documentElement.classList.add('dark');}else{if(window.matchMedia('(prefers-color-scheme: dark)').matches){document.documentElement.classList.add('dark');}else{document.documentElement.classList.remove('dark');}}}catch(e){}})();`,
+          }}
+        />
+      </head>
+      <body className={`${inter.variable} font-sans antialiased min-h-screen`}>{children}</body>
     </html>
   );
 }
